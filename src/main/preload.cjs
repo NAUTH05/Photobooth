@@ -26,6 +26,9 @@ contextBridge.exposeInMainWorld('photobooth', {
     stats: () => ipcRenderer.invoke('queue:stats'),
     retry: () => ipcRenderer.invoke('queue:retry')
   },
+  timelapse: {
+    encode: (payload) => ipcRenderer.invoke('timelapse:encode', payload)
+  },
   native: {
     health: () => ipcRenderer.invoke('native:health'),
     trigger: (sessionId) => ipcRenderer.invoke('native:trigger', sessionId)

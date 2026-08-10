@@ -43,9 +43,10 @@ main { width: min(1240px, 88vw); margin: auto; padding: clamp(80px, 12vw, 170px)
 .photo-card:nth-child(3n + 3) { grid-column: 7 / span 6; margin-top: 8vw; }
 .photo-button { width: 100%; padding: 0; border: 0; background: #ddd5cb; overflow: hidden; cursor: zoom-in; position: relative; }
 .photo-button::after { content: "XEM ẢNH ↗"; position: absolute; right: 18px; bottom: 18px; padding: 10px 13px; border-radius: 99px; background: #f4eee8e8; color: var(--ink); font-size: 9px; letter-spacing: .12em; opacity: 0; transform: translateY(6px); transition: .25s; }
+.photo-button.video::after { content: "XEM VIDEO ▶"; }
 .photo-button:hover::after, .photo-button:focus-visible::after { opacity: 1; transform: none; }
-.photo-button img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain; transition: transform .5s ease; }
-.photo-button:hover img { transform: scale(1.018); }
+.photo-button img, .photo-button video { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain; transition: transform .5s ease; }
+.photo-button:hover img, .photo-button:hover video { transform: scale(1.018); }
 .photo-caption { display: flex; justify-content: space-between; align-items: center; padding: 14px 2px 0; }
 .photo-caption span { font: 18px Georgia, serif; }.photo-caption a { color: #65706b; font-size: 10px; letter-spacing: .1em; text-decoration: none; border-bottom: 1px solid #aaa; padding-bottom: 3px; }
 .loading-card, .empty-card, .error-card { grid-column: 1 / -1; min-height: 320px; display: grid; place-items: center; align-content: center; text-align: center; border: 1px solid var(--line); color: #6b716d; }
@@ -59,7 +60,8 @@ footer p { line-height: 1.7; color: #6b716d; }footer p strong { color: var(--ink
 dialog { width: 100vw; max-width: none; height: 100vh; max-height: none; margin: 0; border: 0; padding: 25px; background: #102d28f5; color: white; }
 dialog[open] { display: grid; grid-template-columns: 70px 1fr 70px; align-items: center; }
 dialog::backdrop { background: #102d28; }
-dialog img { max-width: 100%; max-height: calc(100vh - 100px); justify-self: center; object-fit: contain; }
+dialog img, dialog video { max-width: 100%; max-height: calc(100vh - 100px); justify-self: center; object-fit: contain; }
+dialog video { width: min(1100px, 100%); }
 dialog button { border: 1px solid #ffffff40; color: white; background: #ffffff0c; width: 48px; height: 48px; border-radius: 50%; cursor: pointer; }
 dialog .close { position: absolute; right: 25px; top: 25px; font-size: 24px; }.next { justify-self: end; }.lightbox-download { position: absolute; bottom: 25px; left: 50%; transform: translateX(-50%); color: white; font-size: 11px; letter-spacing: .12em; }
 

@@ -11,7 +11,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const state = {
   config: null, stream: null, mode: 'photo', session: null, frames: [], selectedFrame: null,
   resultDataUrl: '', resultBlob: null, busy: false, uploadUnsubscribe: null, shots: [], sessionFinished: false,
-  selectedShotIndexes: new Set(), galleryUrl: '', qrDataUrl: '', framePreviewUrl: '', previewVersion: 0
+  selectedShotIndexes: new Set(), galleryUrl: '', qrDataUrl: '', framePreviewUrl: '', previewVersion: 0,
+  timelapseRecording: null, timelapseSavePromise: null
 };
 
 function showScreen(id) {
@@ -113,15 +114,19 @@ async function ensureFrameSlots(frame) {
 
 async function startCamera() {
   stopCamera();
-  if (state.config.camera.mode === 'dslr') {
-    $('#cameraVideo').style.display = 'none';
-    $('#cameraModeLabel').textContent = 'DSLR / CANON BRIDGE';
-    return;
-  }
-  $('#cameraVideo').style.display = 'block';
   const camera = state.config.camera;
   const video = { width: { ideal: camera.width }, height: { ideal: camera.height } };
   if (camera.deviceId) video.deviceId = { exact: camera.deviceId }; else video.facingMode = camera.facingMode;
+  if (state.config.camera.mode === 'dslr') {
+    $('#cameraVideo').style.display = 'none';
+    $('#cameraModeLabel').textContent = 'DSLR / CANON BRIDGE';
+    if (state.config.timelapse?.enabled) {
+      try { state.stream = await navigator.mediaDevices.getUserMedia({ video, audio: false }); }
+      catch { updateTimelapseStatus('error', 'Không có webcam quay timelapse'); }
+    }
+    return;
+  }
+  $('#cameraVideo').style.display = 'block';
   state.stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
   const element = $('#cameraVideo');
   element.srcObject = state.stream;
@@ -133,6 +138,72 @@ async function startCamera() {
 function stopCamera() {
   state.stream?.getTracks().forEach((track) => track.stop());
   state.stream = null;
+}
+
+function updateTimelapseStatus(status, message) {
+  const element = $('#timelapseStatus');
+  element.className = `timelapse-status${status === 'hidden' ? '' : ` show ${status}`}`;
+  element.querySelector('span').textContent = message || 'Timelapse 2×';
+}
+
+function startTimelapseRecording() {
+  if (!state.config.timelapse?.enabled) return updateTimelapseStatus('hidden');
+  if (!state.stream || typeof MediaRecorder === 'undefined') {
+    return updateTimelapseStatus('error', 'Không thể quay timelapse');
+  }
+  const mimeType = [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm'
+  ].find((value) => MediaRecorder.isTypeSupported(value));
+  if (!mimeType) return updateTimelapseStatus('error', 'Trình quay video không hỗ trợ');
+  const chunks = [];
+  const recorder = new MediaRecorder(state.stream, {
+    mimeType,
+    videoBitsPerSecond: Number(state.config.timelapse.videoBitsPerSecond) || 4000000
+  });
+  let resolveStopped;
+  let rejectStopped;
+  const stopped = new Promise((resolve, reject) => { resolveStopped = resolve; rejectStopped = reject; });
+  recorder.ondataavailable = (event) => { if (event.data?.size) chunks.push(event.data); };
+  recorder.onerror = (event) => rejectStopped(event.error || new Error('Không thể ghi timelapse'));
+  recorder.onstop = () => resolveStopped(new Blob(chunks, { type: recorder.mimeType || mimeType }));
+  state.timelapseSavePromise = null;
+  state.timelapseRecording = { recorder, stopped, stopTask: null };
+  recorder.start(1000);
+  updateTimelapseStatus('recording', `Đang quay timelapse ${state.config.timelapse.speed || 2}×`);
+}
+
+async function stopTimelapseRecording({ save = true } = {}) {
+  const recording = state.timelapseRecording;
+  if (!recording) return { savePromise: state.timelapseSavePromise };
+  if (recording.stopTask) return recording.stopTask;
+  recording.stopTask = (async () => {
+    if (recording.recorder.state !== 'inactive') recording.recorder.stop();
+    const blob = await recording.stopped;
+    if (state.timelapseRecording === recording) state.timelapseRecording = null;
+    if (!save || !state.session || blob.size < 4) {
+      updateTimelapseStatus('hidden');
+      return { savePromise: null };
+    }
+    updateTimelapseStatus('processing', 'Đang tạo timelapse 2×');
+    const sessionId = state.session.id;
+    const savePromise = (async () => {
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      return window.photobooth.timelapse.encode({ sessionId, bytes });
+    })().then((result) => {
+      updateTimelapseStatus('ready', 'Đã lưu timelapse 2×');
+      return result;
+    }).catch((error) => {
+      console.error(error);
+      updateTimelapseStatus('error', 'Lỗi lưu timelapse');
+      toast(`Không lưu được timelapse: ${error.message}`);
+      return null;
+    });
+    state.timelapseSavePromise = savePromise;
+    return { savePromise };
+  })();
+  return recording.stopTask;
 }
 
 async function countdown(seconds) {
@@ -279,6 +350,10 @@ async function finalizePhoto() {
     await saveBlob(blob, 'photo-strip', 'jpg');
     state.resultBlob = blob;
     state.resultDataUrl = URL.createObjectURL(blob);
+    if (state.timelapseSavePromise) {
+      button.firstChild.textContent = 'Đang hoàn thiện timelapse… ';
+      await state.timelapseSavePromise;
+    }
     const finished = await window.photobooth.session.finish(state.session.id);
     state.sessionFinished = true;
     showResult();
@@ -314,6 +389,10 @@ function candidateCount() {
 }
 
 async function finishCapturePhase() {
+  await stopTimelapseRecording({ save: true }).catch((error) => {
+    console.error(error);
+    updateTimelapseStatus('error', 'Lỗi dừng timelapse');
+  });
   stopCamera();
   state.galleryUrl = await window.photobooth.gallery.url(state.session.id);
   state.qrDataUrl = await QRCode.toDataURL(state.galleryUrl, { width: 260, margin: 1, errorCorrectionLevel: 'M' });
@@ -393,20 +472,38 @@ async function showQr(link) {
 async function openMode() { state.mode = 'photo'; await openCapture(); }
 
 async function openCapture() {
-  if (state.session && !state.sessionFinished) await window.photobooth.session.cancel(state.session.id).catch(() => {});
+  const previousSession = state.session;
+  const previousFinished = state.sessionFinished;
+  const stopped = await stopTimelapseRecording({ save: false }).catch(() => ({ savePromise: state.timelapseSavePromise }));
+  await stopped?.savePromise?.catch(() => {});
+  stopCamera();
+  if (previousSession && !previousFinished) await window.photobooth.session.cancel(previousSession.id).catch(() => {});
   state.session = null; state.sessionFinished = false; state.shots = [];
-  state.selectedShotIndexes = new Set(); state.galleryUrl = ''; state.qrDataUrl = '';
+  state.selectedShotIndexes = new Set(); state.galleryUrl = ''; state.qrDataUrl = ''; state.timelapseSavePromise = null;
   const count = candidateCount();
   showScreen('captureScreen');
+  updateTimelapseStatus('hidden');
   $('#captureMessage').textContent = state.config.camera.captureWorkflow === 'manual' ? 'Nhấn nút để chụp ảnh 1' : 'Nhấn nút để bắt đầu chụp tự động';
   $('#shotProgress').innerHTML = Array.from({ length: count }, () => '<i></i>').join('');
   $('#liveFrame').removeAttribute('src'); $('#liveFrame').style.display = 'none';
-  try { await startCamera(); } catch (error) { toast(`Không mở được camera: ${error.message}`); }
+  try {
+    await startCamera();
+    state.session = await window.photobooth.session.create('photo');
+    startTimelapseRecording();
+  } catch (error) {
+    stopCamera();
+    toast(`Không mở được camera: ${error.message}`);
+  }
 }
 
-function goHome() {
+async function goHome() {
+  const currentSession = state.session;
+  const currentFinished = state.sessionFinished;
+  const stopped = await stopTimelapseRecording({ save: false }).catch(() => ({ savePromise: state.timelapseSavePromise }));
+  await stopped?.savePromise?.catch(() => {});
   stopCamera(); showScreen('homeScreen');
-  if (state.session && !state.sessionFinished) window.photobooth.session.cancel(state.session.id).catch(() => {});
+  updateTimelapseStatus('hidden');
+  if (currentSession && !currentFinished) await window.photobooth.session.cancel(currentSession.id).catch(() => {});
   state.session = null; state.shots = []; refreshStats();
 }
 

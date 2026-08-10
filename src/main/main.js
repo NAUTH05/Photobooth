@@ -8,6 +8,7 @@ import { CppGalleryBackend } from './cpp-gallery-backend.js';
 import { LocalStore } from './local-store.js';
 import { NativeBridge } from './native-bridge.js';
 import { UploadManager } from './upload-manager.js';
+import { TimelapseProcessor } from './timelapse-processor.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow;
@@ -17,6 +18,7 @@ let frameManager;
 let uploader;
 let nativeBridge;
 let galleryServer;
+let timelapseProcessor;
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
@@ -77,6 +79,7 @@ function registerIpc() {
   });
   ipcMain.handle('queue:stats', () => localStore.stats());
   ipcMain.handle('queue:retry', async () => { await uploader.process(); return localStore.stats(); });
+  ipcMain.handle('timelapse:encode', (_event, payload) => timelapseProcessor.encode(payload));
   ipcMain.handle('frames:list', () => frameManager.list());
   ipcMain.handle('frames:sync', () => frameManager.sync());
   ipcMain.handle('gallery:url', (_event, sessionId) => {
@@ -119,6 +122,7 @@ app.whenReady().then(async () => {
   await configStore.load();
   localStore = new LocalStore(path.join(app.getPath('userData'), 'runtime-data'));
   await localStore.init();
+  timelapseProcessor = new TimelapseProcessor(localStore, configStore);
   const driveFactory = (config) => new DriveClient(config);
   frameManager = new FrameManager(
     path.join(app.getPath('userData'), 'frames'),

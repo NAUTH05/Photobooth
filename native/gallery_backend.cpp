@@ -175,10 +175,11 @@ std::string mime_type(const std::string& filename) {
   if (extension == ".jpg" || extension == ".jpeg") return "image/jpeg";
   if (extension == ".png") return "image/png";
   if (extension == ".webp") return "image/webp";
+  if (extension == ".mp4") return "video/mp4";
   return {};
 }
 
-bool valid_image_signature(const std::string& path, const std::string& mime) {
+bool valid_media_signature(const std::string& path, const std::string& mime) {
   std::ifstream input(path.c_str(), std::ios::binary);
   unsigned char bytes[12]{};
   input.read(reinterpret_cast<char*>(bytes), sizeof(bytes));
@@ -192,6 +193,9 @@ bool valid_image_signature(const std::string& path, const std::string& mime) {
     return count >= 12 && std::equal(bytes, bytes + 4, reinterpret_cast<const unsigned char*>("RIFF"))
       && std::equal(bytes + 8, bytes + 12, reinterpret_cast<const unsigned char*>("WEBP"));
   }
+  if (mime == "video/mp4") {
+    return count >= 12 && std::equal(bytes + 4, bytes + 8, reinterpret_cast<const unsigned char*>("ftyp"));
+  }
   return false;
 }
 
@@ -199,7 +203,7 @@ std::string safe_filename(std::string value) {
   for (auto& character : value) {
     if (character == '"' || character == '\r' || character == '\n' || character == '\\' || character == '/') character = '_';
   }
-  return value.empty() ? "photo.jpg" : value;
+  return value.empty() ? "media.jpg" : value;
 }
 
 bool safe_drive_id(const std::string& value) {
@@ -212,7 +216,7 @@ bool safe_drive_id(const std::string& value) {
 bool gallery_item(const json& item) {
   if (!item.is_object() || !item.contains("kind") || !item["kind"].is_string()) return false;
   const auto kind = item["kind"].get<std::string>();
-  return kind.find("photo") == 0 || kind.find("dslr") == 0;
+  return kind.find("photo") == 0 || kind.find("dslr") == 0 || kind.find("video") == 0;
 }
 
 json public_session(const json& session) {
@@ -228,13 +232,16 @@ json public_session(const json& session) {
     if (!gallery_item(item) || !item.contains("id") || !item["id"].is_string()) continue;
     const auto id = item["id"].get<std::string>();
     const auto kind = item.value("kind", "photo");
+    const auto filename = item.value("filename", "photo.jpg");
+    const bool video = kind.find("video") == 0;
     result["items"].push_back({
       {"id", id},
       {"kind", kind},
-      {"filename", item.value("filename", "photo.jpg")},
+      {"filename", filename},
       {"size", item.value("size", 0)},
       {"createdAt", item.value("createdAt", "")},
-      {"label", kind == "photo-strip" ? "Ảnh ghép 4×6" : "Ảnh gốc"},
+      {"label", video ? "Video timelapse 2×" : (kind == "photo-strip" ? "Ảnh ghép 4×6" : "Ảnh gốc")},
+      {"mediaType", video ? "video" : "image"},
       {"mediaUrl", "/media/" + session.value("id", "") + "/" + id},
       {"downloadUrl", "/media/" + session.value("id", "") + "/" + id + "?download=1"}
     });
@@ -281,10 +288,10 @@ int main(int argc, char** argv) {
   server.set_idle_interval(0, 100000);
 
   server.Get("/health", [](const httplib::Request&, httplib::Response& response) {
-    json_response(response, 200, {{"ok", true}, {"backend", "cpp"}, {"version", "1.0.0"}});
+    json_response(response, 200, {{"ok", true}, {"backend", "cpp"}, {"version", "1.1.0"}});
   });
   server.Get("/api/health", [](const httplib::Request&, httplib::Response& response) {
-    json_response(response, 200, {{"status", "ok"}, {"backend", "cpp"}, {"version", "1.0.0"}});
+    json_response(response, 200, {{"status", "ok"}, {"backend", "cpp"}, {"version", "1.1.0"}});
   });
   server.Get("/assets/gallery.css", [&](const httplib::Request&, httplib::Response& response) {
     serve_static(options, "gallery.css", "text/css; charset=utf-8", response);
@@ -313,14 +320,14 @@ int main(int argc, char** argv) {
     const auto lookup = find_session(options, request, request.matches[1], session);
     if (lookup != Lookup::ok) return lookup_error(lookup, response);
     const auto* item = find_item(session, request.matches[2]);
-    if (!item) return text_response(response, 404, "Không tìm thấy ảnh.");
+    if (!item) return text_response(response, 404, "Không tìm thấy tệp.");
     const auto filename = item->value("filename", "photo.jpg");
     const auto mime = mime_type(filename);
-    if (mime.empty()) return text_response(response, 415, "Định dạng ảnh không được hỗ trợ.");
+    if (mime.empty()) return text_response(response, 415, "Định dạng tệp không được hỗ trợ.");
     const bool download = request.has_param("download") && request.get_param_value("download") == "1";
     if (!item->contains("deletedAt") && item->contains("path") && (*item)["path"].is_string()) {
       const auto path = (*item)["path"].get<std::string>();
-      if (valid_image_signature(path, mime)) {
+      if (valid_media_signature(path, mime)) {
         response.set_header("Content-Disposition", std::string(download ? "attachment" : "inline") + "; filename=\"" + safe_filename(filename) + "\"");
         response.set_header("Cache-Control", "private, max-age=300");
         response.set_header("X-Content-Type-Options", "nosniff");

@@ -14,6 +14,10 @@ test('legacy .env values configure printer, QR, resolution and non-mirrored outp
     QR_SIZE_STANDARD=120
     QR_POS_X_FRACTION=0.04
     QR_POS_Y_FRACTION=0.985
+    VIDEO_SPEED=0.5
+    VIDEO_CRF=5
+    TIMELAPSE_ENABLED=true
+    TIMELAPSE_VIDEO_BITS_PER_SECOND=4000000
     MIRROR_PREVIEW=true
     MIRROR_OUTPUT=false
     LOCAL_FRAMES_DIR=./frames
@@ -27,6 +31,10 @@ test('legacy .env values configure printer, QR, resolution and non-mirrored outp
   assert.equal(config.composite.qrEnabled, true);
   assert.equal(config.composite.qrSizeStrip, 140);
   assert.equal(config.composite.qrSizeStandard, 120);
+  assert.equal(config.timelapse.enabled, true);
+  assert.equal(config.timelapse.speed, 2);
+  assert.equal(config.timelapse.crf, 5);
+  assert.equal(config.timelapse.videoBitsPerSecond, 4000000);
   assert.equal(config.camera.mirrorPreview, true);
   assert.equal(config.camera.mirrorOutput, false);
   assert.equal(config.frames.localDir, path.resolve(root, 'frames'));

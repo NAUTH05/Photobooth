@@ -3,15 +3,18 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const safeTime = () => new Date().toISOString().replace(/[:.]/g, '-');
-const allowedExtensions = new Set(['jpg', 'jpeg', 'png']);
+const allowedExtensions = new Set(['jpg', 'jpeg', 'png', 'mp4']);
 const isExpired = (session) => Boolean(session.expiresAt && Date.parse(session.expiresAt) <= Date.now());
 
-function isValidImage(buffer, extension) {
+function isValidArtifact(buffer, extension) {
   if (extension === 'jpg' || extension === 'jpeg') {
     return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
   }
   if (extension === 'png') {
     return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  }
+  if (extension === 'mp4') {
+    return buffer.length >= 12 && buffer.subarray(4, 8).equals(Buffer.from('ftyp'));
   }
   return false;
 }
@@ -75,7 +78,7 @@ export class LocalStore {
     const filename = cleanOriginal || `${safeTime()}_${sequence}_${kind}.${ext}`;
     const target = path.join(this.sessionPath(sessionId), filename);
     const buffer = Buffer.from(bytes);
-    if (!isValidImage(buffer, ext)) throw new Error('Nội dung ảnh không hợp lệ');
+    if (!isValidArtifact(buffer, ext)) throw new Error('Nội dung tệp không hợp lệ');
     await fs.writeFile(target, buffer);
     const item = {
       id: crypto.randomUUID(), kind, filename, path: target, size: buffer.length,

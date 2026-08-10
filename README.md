@@ -78,6 +78,15 @@ File `.env` ở thư mục gốc được nạp sau cấu hình mặc định v�
 
 Ứng dụng sync khung khi người vận hành bấm **Đồng bộ khung ngay** và sau đó theo chu kỳ cấu hình. Cache local cho phép tiếp tục chụp khi ở công viên mất mạng.
 
+## Timelapse 2×
+
+Mỗi phiên tự bắt đầu ghi video ngay khi webcam sẵn sàng và dừng sau ảnh cuối cùng. Video nguồn được FFmpeg tăng tốc thật 2×, xuất MP4 H.264 rồi lưu chung session để xem, tải hoặc upload Google Drive cùng bộ ảnh.
+
+- `TIMELAPSE_ENABLED=true`: bật ghi timelapse tự động.
+- `VIDEO_SPEED=0.5`: rút thời lượng còn một nửa, tương đương tốc độ 2×.
+- `VIDEO_CRF`: chất lượng MP4 đầu ra, số càng nhỏ càng nét và dung lượng càng lớn.
+- `TIMELAPSE_VIDEO_BITS_PER_SECOND`: bitrate của video WebM tạm trước khi xử lý.
+
 ## Canon R100 / DSLR
 
 Do Canon EDSDK có giấy phép phân phối riêng, repo cung cấp bridge C++ ổn định và contract để gắn helper đã build bằng EDSDK. Chi tiết ở `native/adapters/README.md`. Webcam hoạt động hoàn chỉnh mà không cần helper. Với DSLR, nhập đường dẫn helper và từng argument trong Quản trị → Camera; `{output}` sẽ được thay bằng đường dẫn JPEG của phiên.

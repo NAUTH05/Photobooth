@@ -113,7 +113,7 @@ export class DriveClient {
   async uploadFile(folderId, item) {
     const drive = await this.ensure();
     const mimeByExtension = {
-      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png'
+      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.mp4': 'video/mp4'
     };
     const existing = await drive.files.list({
       q: `'${folderId}' in parents and trashed = false and appProperties has { key='photoboothItem' and value='${item.id}' }`,

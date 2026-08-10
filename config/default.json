@@ -51,6 +51,12 @@
     "qrPosXFraction": 0.79,
     "qrPosYFraction": 0.975
   },
+  "timelapse": {
+    "enabled": true,
+    "speed": 2,
+    "crf": 28,
+    "videoBitsPerSecond": 4000000
+  },
   "print": {
     "enabled": true,
     "deviceName": "",

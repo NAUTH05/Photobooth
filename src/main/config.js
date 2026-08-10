@@ -40,6 +40,7 @@ export function envConfigPatch(values, appPath) {
   const resolution = Math.max(1200, Math.min(7200, Math.round(envNumber(values.COMPOSITE_TARGET_RESOLUTION, 1800))));
   const port = Math.max(1024, Math.min(65535, Math.round(envNumber(values.PORT, 3847))));
   const framesValue = values.LOCAL_FRAMES_DIR || './frames';
+  const videoTimeFactor = Math.max(.125, Math.min(1, envNumber(values.VIDEO_SPEED, .5)));
   return {
     camera: {
       mirrorPreview: envBoolean(values.MIRROR_PREVIEW, true),
@@ -71,11 +72,17 @@ export function envConfigPatch(values, appPath) {
       qrPosXFraction: Math.max(0, Math.min(1, envNumber(values.QR_POS_X_FRACTION, .79))),
       qrPosYFraction: Math.max(0, Math.min(1, envNumber(values.QR_POS_Y_FRACTION, .975)))
     },
+    timelapse: {
+      enabled: envBoolean(values.TIMELAPSE_ENABLED, true),
+      speed: Math.round((1 / videoTimeFactor) * 100) / 100,
+      crf: Math.max(0, Math.min(51, Math.round(envNumber(values.VIDEO_CRF, 28)))),
+      videoBitsPerSecond: Math.max(500000, Math.min(20000000, Math.round(envNumber(values.TIMELAPSE_VIDEO_BITS_PER_SECOND, 4000000))))
+    },
     legacy: {
       cmsApiUrl: values.CMS_API_URL || '',
       comPort: values.COM_PORT || '',
       skinSmoothingLevel: envNumber(values.SKIN_SMOOTHING_LEVEL, 0),
-      videoSpeed: envNumber(values.VIDEO_SPEED, 1),
+      videoSpeed: videoTimeFactor,
       videoCrf: envNumber(values.VIDEO_CRF, 5)
     }
   };

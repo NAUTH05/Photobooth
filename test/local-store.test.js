@@ -38,7 +38,7 @@ test('rejects disguised images and removes an empty gallery instead of leaving a
     const session = await store.createSession('photo');
     await assert.rejects(
       store.saveArtifact({ sessionId: session.id, kind: 'photo', extension: 'jpg', bytes: Buffer.from('not-a-jpeg') }),
-      /Nội dung ảnh không hợp lệ/
+      /Nội dung tệp không hợp lệ/
     );
     await assert.rejects(store.finishSession(session.id), /gallery rỗng/i);
     assert.equal(store.queue.sessions[session.id], undefined);
