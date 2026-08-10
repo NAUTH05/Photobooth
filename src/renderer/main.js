@@ -1,7 +1,6 @@
 import './styles.css';
 import QRCode from 'qrcode';
 import { containRect } from '../shared/image-layout.js';
-import { detectTransparentSlots } from '../shared/frame-slots.js';
 import { DEFAULT_FOOTER_HEIGHT, frameSupportsCount, PRINT_HEIGHT, PRINT_WIDTH, resolvePhotoSlots } from '../shared/photo-layout.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -10,9 +9,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const state = {
   config: null, stream: null, mode: 'photo', session: null, frames: [], selectedFrame: null,
-  resultDataUrl: '', resultBlob: null, busy: false, uploadUnsubscribe: null, shots: [], sessionFinished: false,
+  resultDataUrl: '', resultBlob: null, resultProfile: '4x6-portrait', busy: false, uploadUnsubscribe: null, shots: [], sessionFinished: false,
   selectedShotIndexes: new Set(), galleryUrl: '', qrDataUrl: '', framePreviewUrl: '', previewVersion: 0,
-  timelapseRecording: null, timelapseSavePromise: null
+  timelapseRecording: null, timelapseSavePromise: null, photoTransforms: {}, activeTransformId: '', previewTimer: null
 };
 
 function showScreen(id) {
@@ -69,46 +68,144 @@ function renderFrames() {
     button.onclick = () => {
       state.selectedFrame = frame;
       container.querySelectorAll('.frame-option').forEach((item) => item.classList.toggle('active', item === button));
-      updateFramePreview().catch((error) => toast(`Không dựng được preview: ${error.message}`));
+      renderTransformControls(); scheduleFramePreview(0);
     };
     container.append(button);
   }
-  updateFramePreview().catch((error) => toast(`Không dựng được preview: ${error.message}`));
+  renderTransformControls(); scheduleFramePreview(0);
+}
+
+function selectedShots() {
+  return [...state.selectedShotIndexes].sort((a, b) => a - b).map((index) => state.shots[index]);
+}
+
+function compositePayload(shots = selectedShots()) {
+  return {
+    sessionId: state.session.id,
+    artifactIds: shots.map((shot) => shot.artifactId),
+    frameId: state.selectedFrame.id,
+    transforms: state.photoTransforms,
+    qrDataUrl: state.qrDataUrl
+  };
+}
+
+function bytesToBlob(result) {
+  return new Blob([new Uint8Array(result.bytes)], { type: result.mimeType || 'image/jpeg' });
+}
+
+function scheduleFramePreview(delay = 80) {
+  clearTimeout(state.previewTimer);
+  state.previewTimer = setTimeout(() => updateFramePreview().catch((error) => toast(`Không dựng được preview: ${error.message}`)), delay);
+}
+
+function ensureTransformControls() {
+  let panel = $('#photoTransformControls');
+  if (panel) return panel;
+  panel = document.createElement('div');
+  panel.id = 'photoTransformControls';
+  panel.className = 'photo-transform-controls';
+  panel.innerHTML = '<div class="transform-shots"></div><label>Phóng ảnh <input class="transform-zoom" type="range" min="1" max="3" step="0.05" value="1"></label><div class="transform-buttons"><button type="button" data-pan="left">←</button><button type="button" data-pan="up">↑</button><button type="button" data-pan="down">↓</button><button type="button" data-pan="right">→</button><button type="button" data-rotate="-90">↶</button><button type="button" data-rotate="90">↷</button><button type="button" data-reset>Đặt lại</button></div>';
+  $('#frameOptions').before(panel);
+  panel.querySelector('.transform-zoom').oninput = (event) => {
+    const transform = state.photoTransforms[state.activeTransformId];
+    if (!transform) return;
+    transform.zoom = Number(event.target.value);
+    scheduleFramePreview();
+  };
+  panel.querySelectorAll('[data-pan]').forEach((button) => button.onclick = () => {
+    const transform = state.photoTransforms[state.activeTransformId];
+    if (!transform) return;
+    const direction = button.dataset.pan;
+    if (direction === 'left') transform.panX = Math.max(0, transform.panX - 5);
+    if (direction === 'right') transform.panX = Math.min(100, transform.panX + 5);
+    if (direction === 'up') transform.panY = Math.max(0, transform.panY - 5);
+    if (direction === 'down') transform.panY = Math.min(100, transform.panY + 5);
+    scheduleFramePreview();
+  });
+  panel.querySelectorAll('[data-rotate]').forEach((button) => button.onclick = () => {
+    const transform = state.photoTransforms[state.activeTransformId];
+    if (!transform) return;
+    transform.rotation = (transform.rotation + Number(button.dataset.rotate) + 360) % 360;
+    scheduleFramePreview();
+  });
+  panel.querySelector('[data-reset]').onclick = () => {
+    if (!state.activeTransformId) return;
+    state.photoTransforms[state.activeTransformId] = { panX: 50, panY: 50, zoom: 1, rotation: 0 };
+    renderTransformControls(); scheduleFramePreview(0);
+  };
+  const preview = $('#framePreview');
+  let drag = null;
+  preview.addEventListener('pointerdown', (event) => {
+    const transform = state.photoTransforms[state.activeTransformId];
+    if (!transform || !$('#framePreviewImage').src) return;
+    drag = { x: event.clientX, y: event.clientY, panX: transform.panX, panY: transform.panY };
+    preview.setPointerCapture(event.pointerId);
+    preview.classList.add('dragging');
+    event.preventDefault();
+  });
+  preview.addEventListener('pointermove', (event) => {
+    if (!drag) return;
+    const transform = state.photoTransforms[state.activeTransformId];
+    if (!transform) return;
+    const bounds = preview.getBoundingClientRect();
+    transform.panX = Math.max(0, Math.min(100, drag.panX - (event.clientX - drag.x) / bounds.width * 100));
+    transform.panY = Math.max(0, Math.min(100, drag.panY - (event.clientY - drag.y) / bounds.height * 100));
+    scheduleFramePreview();
+  });
+  const finishDrag = (event) => {
+    if (!drag) return;
+    drag = null;
+    if (preview.hasPointerCapture(event.pointerId)) preview.releasePointerCapture(event.pointerId);
+    preview.classList.remove('dragging');
+  };
+  preview.addEventListener('pointerup', finishDrag);
+  preview.addEventListener('pointercancel', finishDrag);
+  return panel;
+}
+
+function renderTransformControls() {
+  const panel = ensureTransformControls();
+  const shots = selectedShots();
+  if (!shots.some((shot) => shot.artifactId === state.activeTransformId)) state.activeTransformId = shots[0]?.artifactId || '';
+  const container = panel.querySelector('.transform-shots');
+  container.replaceChildren();
+  shots.forEach((shot, index) => {
+    const button = document.createElement('button');
+    button.type = 'button'; button.textContent = `Ảnh ${index + 1}`;
+    button.classList.toggle('active', shot.artifactId === state.activeTransformId);
+    button.onclick = () => { state.activeTransformId = shot.artifactId; renderTransformControls(); };
+    container.append(button);
+  });
+  const transform = state.photoTransforms[state.activeTransformId];
+  panel.querySelector('.transform-zoom').value = transform?.zoom || 1;
+  panel.hidden = shots.length === 0;
 }
 
 async function updateFramePreview() {
   const image = $('#framePreviewImage');
   $('#framePreview').style.background = `linear-gradient(145deg,${state.selectedFrame?.accent || '#f9d9cf'},#f8dfd6)`;
-  const shots = [...state.selectedShotIndexes].sort((a, b) => a - b).map((index) => state.shots[index]);
-  if (shots.length < 1 || !state.qrDataUrl) {
+  const shots = selectedShots();
+  if (shots.length < 1 || !state.qrDataUrl || !state.selectedFrame) {
     image.removeAttribute('src'); image.style.display = 'none'; return;
   }
   const version = ++state.previewVersion;
   $('.preview-smile').style.display = 'block';
   await ensureFrameSlots(state.selectedFrame);
-  const blob = await composePhotoStrip(shots, state.selectedFrame, state.qrDataUrl, { preview: true });
+  const result = await window.photobooth.composite.preview(compositePayload(shots));
   if (version !== state.previewVersion) return;
+  const blob = bytesToBlob(result);
   if (state.framePreviewUrl) URL.revokeObjectURL(state.framePreviewUrl);
   state.framePreviewUrl = URL.createObjectURL(blob);
   image.src = state.framePreviewUrl;
   image.style.display = 'block';
+  $('#framePreview').style.aspectRatio = result.width / result.height;
   $('.preview-smile').style.display = 'none';
 }
 
 async function ensureFrameSlots(frame) {
-  if (!frame?.inferSlots || Array.isArray(frame.slots) || !frame.dataUrl) return frame;
-  const image = await imageFromUrl(frame.dataUrl);
-  const sampleWidth = 300;
-  const sampleHeight = Math.max(1, Math.round(sampleWidth * image.naturalHeight / image.naturalWidth));
-  const canvas = document.createElement('canvas');
-  canvas.width = sampleWidth; canvas.height = sampleHeight;
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  context.clearRect(0, 0, sampleWidth, sampleHeight);
-  context.drawImage(image, 0, 0, sampleWidth, sampleHeight);
-  const pixels = context.getImageData(0, 0, sampleWidth, sampleHeight);
-  const slots = detectTransparentSlots(pixels.data, sampleWidth, sampleHeight, Number(frame.slotCount));
-  if (slots.length !== Number(frame.slotCount)) throw new Error(`Không dò được ${frame.slotCount} vùng ảnh trong frame ${frame.name}`);
-  frame.slots = slots;
+  if (!frame?.inferSlots || Array.isArray(frame.slots)) return frame;
+  const analyzed = await window.photobooth.frames.analyze(frame.id);
+  Object.assign(frame, analyzed);
   return frame;
 }
 
@@ -230,12 +327,13 @@ function dataUrlToBlob(dataUrl) {
 async function captureStill() {
   if (state.config.camera.mode === 'dslr') {
     const result = await window.photobooth.native.trigger(state.session.id);
-    return result.dataUrl;
+    return { artifactId: result.item.id, kind: result.item.kind, dataUrl: result.dataUrl };
   }
   const video = $('#cameraVideo');
   const canvas = $('#cameraCanvas');
   canvas.width = video.videoWidth || state.config.camera.width;
   canvas.height = video.videoHeight || state.config.camera.height;
+  console.info(`Webcam negotiated capture: ${canvas.width}x${canvas.height}`);
   const context = canvas.getContext('2d');
   context.setTransform(1, 0, 0, 1, 0, 0);
   context.clearRect(0, 0, canvas.width, canvas.height);
@@ -244,7 +342,9 @@ async function captureStill() {
     context.scale(-1, 1);
   }
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL('image/jpeg', .94);
+  const dataUrl = canvas.toDataURL('image/jpeg', .94);
+  const item = await saveBlob(dataUrlToBlob(dataUrl), 'photo-original', 'jpg');
+  return { artifactId: item.id, kind: item.kind, dataUrl, width: canvas.width, height: canvas.height };
 }
 
 async function imageFromUrl(url) {
@@ -345,10 +445,11 @@ async function finalizePhoto() {
   button.disabled = true; button.firstChild.textContent = 'Đang ghép ảnh… ';
   try {
     await ensureFrameSlots(state.selectedFrame);
-    const selectedShots = [...state.selectedShotIndexes].sort((a, b) => a - b).map((index) => state.shots[index]);
-    const blob = await composePhotoStrip(selectedShots, state.selectedFrame, state.qrDataUrl);
-    await saveBlob(blob, 'photo-strip', 'jpg');
+    const shots = selectedShots();
+    const result = await window.photobooth.composite.create(compositePayload(shots));
+    const blob = bytesToBlob(result);
     state.resultBlob = blob;
+    state.resultProfile = result.profile || '4x6-portrait';
     state.resultDataUrl = URL.createObjectURL(blob);
     if (state.timelapseSavePromise) {
       button.firstChild.textContent = 'Đang hoàn thiện timelapse… ';
@@ -368,9 +469,9 @@ async function finalizePhoto() {
 async function captureAndStoreShot(index, count) {
   $('#captureMessage').textContent = `Tạo dáng cho ảnh ${index + 1} / ${count}`;
   await countdown(state.config.camera.countdownSeconds);
-  const dataUrl = await captureStill();
-  state.shots.push(dataUrl);
-  if (state.config.camera.mode !== 'dslr') await saveBlob(dataUrlToBlob(dataUrl), 'photo-original', 'jpg');
+  const shot = await captureStill();
+  state.shots.push(shot);
+  state.photoTransforms[shot.artifactId] ??= { panX: 50, panY: 50, zoom: 1, rotation: 0 };
   $$('#shotProgress i')[index].classList.add('done');
   $('#countdown').classList.add('flash'); await sleep(110); $('#countdown').classList.remove('flash');
 }
@@ -408,7 +509,7 @@ function renderShotSelection() {
     const button = document.createElement('button');
     button.className = `shot-option${state.selectedShotIndexes.has(index) ? ' selected' : ''}`;
     button.type = 'button'; button.setAttribute('aria-pressed', String(state.selectedShotIndexes.has(index)));
-    const image = document.createElement('img'); image.src = shot; image.alt = `Ảnh đã chụp ${index + 1}`;
+    const image = document.createElement('img'); image.src = shot.dataUrl; image.alt = `Ảnh đã chụp ${index + 1}`;
     const number = document.createElement('span'); number.className = 'shot-number'; number.textContent = index + 1;
     const mark = document.createElement('span'); mark.className = 'selected-mark'; mark.textContent = '✓';
     button.append(image, number, mark);
@@ -427,6 +528,7 @@ function openFrameSelection() {
   if (state.selectedShotIndexes.size < 1) return;
   $('#frameScreen .section-heading h2').textContent = `Chọn khung phù hợp với ${state.selectedShotIndexes.size} ảnh`;
   showScreen('frameScreen');
+  renderTransformControls();
   renderFrames();
 }
 
@@ -479,7 +581,7 @@ async function openCapture() {
   stopCamera();
   if (previousSession && !previousFinished) await window.photobooth.session.cancel(previousSession.id).catch(() => {});
   state.session = null; state.sessionFinished = false; state.shots = [];
-  state.selectedShotIndexes = new Set(); state.galleryUrl = ''; state.qrDataUrl = ''; state.timelapseSavePromise = null;
+  state.photoTransforms = {}; state.activeTransformId = ''; state.selectedShotIndexes = new Set(); state.galleryUrl = ''; state.qrDataUrl = ''; state.timelapseSavePromise = null;
   const count = candidateCount();
   showScreen('captureScreen');
   updateTimelapseStatus('hidden');
@@ -504,7 +606,7 @@ async function goHome() {
   stopCamera(); showScreen('homeScreen');
   updateTimelapseStatus('hidden');
   if (currentSession && !currentFinished) await window.photobooth.session.cancel(currentSession.id).catch(() => {});
-  state.session = null; state.shots = []; refreshStats();
+  state.session = null; state.shots = []; state.photoTransforms = {}; state.activeTransformId = ''; refreshStats();
 }
 
 function getAtPath(object, dotted) { return dotted.split('.').reduce((value, key) => value?.[key], object); }
@@ -570,7 +672,7 @@ async function init() {
   $('#retakeButton').onclick = openMode; $('#finishButton').onclick = goHome;
   $('#printButton').onclick = async () => {
     const dataUrl = await new Promise((resolve) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsDataURL(state.resultBlob); });
-    const result = await window.photobooth.print(dataUrl); toast(result.ok ? 'Đã gửi lệnh in' : `Không in được: ${result.error}`);
+    const result = await window.photobooth.print({ dataUrl, profile: state.resultProfile }); toast(result.ok ? 'Đã gửi lệnh in' : `Không in được: ${result.error}`);
   };
   $$('.tab').forEach((tab) => tab.onclick = () => {
     $$('.tab').forEach((item) => item.classList.toggle('active', item === tab));

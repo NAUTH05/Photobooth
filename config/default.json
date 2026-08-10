@@ -42,9 +42,12 @@
     "expirationDays": 7
   },
   "composite": {
-    "targetResolution": 1800,
+    "targetResolution": 3600,
+    "previewResolution": 1200,
     "jpegQuality": 95,
     "chroma444": false,
+    "density": 600,
+    "holeOutsetPx": 3,
     "qrEnabled": true,
     "qrSizeStrip": 140,
     "qrSizeStandard": 120,
@@ -60,10 +63,17 @@
   "print": {
     "enabled": true,
     "deviceName": "",
+    "deviceName2Cut": "",
     "silent": false,
     "copies": 1,
     "pageWidthMicrons": 101600,
-    "pageHeightMicrons": 152400
+    "pageHeightMicrons": 152400,
+    "offsetX": 0,
+    "offsetY": 0,
+    "offset4x6X": 0,
+    "offset4x6Y": 0,
+    "offset4x6LandscapeX": 0,
+    "offset4x6LandscapeY": 0
   },
   "branding": {
     "name": "Roti Photobooth",

@@ -37,7 +37,7 @@ const envBoolean = (value, fallback) => value == null ? fallback : ['1', 'true',
 const envNumber = (value, fallback) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 
 export function envConfigPatch(values, appPath) {
-  const resolution = Math.max(1200, Math.min(7200, Math.round(envNumber(values.COMPOSITE_TARGET_RESOLUTION, 1800))));
+  const resolution = Math.max(1200, Math.min(7200, Math.round(envNumber(values.COMPOSITE_TARGET_RESOLUTION, 3600))));
   const port = Math.max(1024, Math.min(65535, Math.round(envNumber(values.PORT, 3847))));
   const framesValue = values.LOCAL_FRAMES_DIR || './frames';
   const videoTimeFactor = Math.max(.125, Math.min(1, envNumber(values.VIDEO_SPEED, .5)));
@@ -64,8 +64,11 @@ export function envConfigPatch(values, appPath) {
     },
     composite: {
       targetResolution: resolution,
+      previewResolution: Math.max(600, Math.min(2400, Math.round(envNumber(values.COMPOSITE_PREVIEW_RESOLUTION, 1200)))),
       jpegQuality: Math.max(1, Math.min(100, Math.round(envNumber(values.COMPOSITE_JPEG_QUALITY, 95)))),
       chroma444: envBoolean(values.COMPOSITE_CHROMA_444, false),
+      density: Math.max(72, Math.min(1200, Math.round(envNumber(values.COMPOSITE_DENSITY, 600)))),
+      holeOutsetPx: Math.max(0, Math.min(30, envNumber(values.HOLE_OUTSET_PX, 3))),
       qrEnabled: envBoolean(values.ENABLE_QR_ON_FRAME, true),
       qrSizeStrip: Math.max(60, Math.round(envNumber(values.QR_SIZE_STRIP, 140))),
       qrSizeStandard: Math.max(60, Math.round(envNumber(values.QR_SIZE_STANDARD, 120))),

@@ -9,6 +9,7 @@ import { LocalStore } from './local-store.js';
 import { NativeBridge } from './native-bridge.js';
 import { UploadManager } from './upload-manager.js';
 import { TimelapseProcessor } from './timelapse-processor.js';
+import { SharpCompositor } from './sharp-compositor.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow;
@@ -19,6 +20,7 @@ let uploader;
 let nativeBridge;
 let galleryServer;
 let timelapseProcessor;
+let sharpCompositor;
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
@@ -82,6 +84,9 @@ function registerIpc() {
   ipcMain.handle('timelapse:encode', (_event, payload) => timelapseProcessor.encode(payload));
   ipcMain.handle('frames:list', () => frameManager.list());
   ipcMain.handle('frames:sync', () => frameManager.sync());
+  ipcMain.handle('frames:analyze', (_event, frameId) => frameManager.resolve(frameId));
+  ipcMain.handle('composite:preview', (_event, payload) => sharpCompositor.render({ ...payload, preview: true, save: false }));
+  ipcMain.handle('composite:create', (_event, payload) => sharpCompositor.render({ ...payload, preview: false, save: true }));
   ipcMain.handle('gallery:url', (_event, sessionId) => {
     const sessionValue = localStore.queue.sessions[sessionId];
     if (!sessionValue) throw new Error('Session not found');
@@ -95,20 +100,34 @@ function registerIpc() {
   });
   ipcMain.handle('native:health', () => nativeBridge.health());
   ipcMain.handle('native:trigger', (_event, sessionId) => nativeBridge.trigger(sessionId, configStore.get().camera.dslr));
-  ipcMain.handle('print:image', async (_event, dataUrl) => {
+  ipcMain.handle('print:image', async (_event, payload) => {
     const config = configStore.get().print;
     if (!config.enabled) return { ok: false, error: 'Printing is disabled' };
+    const request = typeof payload === 'string' ? { dataUrl: payload } : (payload || {});
+    const dataUrl = String(request.dataUrl || '');
+    if (!dataUrl.startsWith('data:image/')) return { ok: false, error: 'Invalid image data' };
+    const profile = String(request.profile || '4x6-portrait');
+    const isLandscape = profile === '4x6-landscape';
+    const isStrip = profile === '2x6';
+    const deviceName = isStrip ? (config.deviceName2Cut || config.deviceName) : config.deviceName;
+    const offsetX = isLandscape
+      ? (Number.isFinite(Number(config.offset4x6LandscapeX)) ? Number(config.offset4x6LandscapeX) : Number(config.offset4x6X) || Number(config.offsetX) || 0)
+      : (Number.isFinite(Number(config.offset4x6X)) ? Number(config.offset4x6X) : Number(config.offsetX) || 0);
+    const offsetY = isLandscape
+      ? (Number.isFinite(Number(config.offset4x6LandscapeY)) ? Number(config.offset4x6LandscapeY) : Number(config.offset4x6Y) || Number(config.offsetY) || 0)
+      : (Number.isFinite(Number(config.offset4x6Y)) ? Number(config.offset4x6Y) : Number(config.offsetY) || 0);
+    const orientation = isLandscape ? 'landscape' : 'portrait';
+    const html = `<!doctype html><style>@page{margin:0;size:${orientation}}html,body{margin:0;width:100%;height:100%;overflow:hidden}img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transform:translate(${offsetX}mm,${offsetY}mm)}</style><img src="${dataUrl}">`;
     const printWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
-    const offsetX = Number.isFinite(Number(config.offset4x6X)) ? Number(config.offset4x6X) : Number(config.offsetX) || 0;
-    const offsetY = Number.isFinite(Number(config.offset4x6Y)) ? Number(config.offset4x6Y) : Number(config.offsetY) || 0;
-    const html = `<!doctype html><style>@page{margin:0}html,body{margin:0;width:100%;height:100%;overflow:hidden}img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transform:translate(${offsetX}mm,${offsetY}mm)}</style><img src="${dataUrl}">`;
-    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
-    const result = await new Promise((resolve) => printWindow.webContents.print({
-      silent: config.silent, deviceName: config.deviceName || undefined, printBackground: true,
-      copies: config.copies, pageSize: { width: config.pageWidthMicrons, height: config.pageHeightMicrons }
-    }, (success, failureReason) => resolve({ ok: success, error: failureReason })));
-    printWindow.destroy();
-    return result;
+    try {
+      await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+      return await new Promise((resolve) => printWindow.webContents.print({
+        silent: config.silent, deviceName: deviceName || undefined, printBackground: true,
+        copies: config.copies, pageSize: { width: config.pageWidthMicrons, height: config.pageHeightMicrons }, landscape: isLandscape
+      }, (success, failureReason) => resolve({ ok: success, error: failureReason })));
+    } finally {
+      printWindow.destroy();
+    }
   });
 }
 
@@ -131,6 +150,7 @@ app.whenReady().then(async () => {
     configStore.get().frames.localDir
   );
   await frameManager.init();
+  sharpCompositor = new SharpCompositor(localStore, frameManager, configStore);
   nativeBridge = new NativeBridge(appPath, localStore, app.isPackaged ? process.resourcesPath : null);
   galleryServer = new CppGalleryBackend(
     appPath,

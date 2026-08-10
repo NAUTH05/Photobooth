@@ -19,7 +19,8 @@
   "dependencies": {
     "ffmpeg-static": "^5.3.0",
     "googleapis": "^150.0.1",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "sharp": "^0.35.3"
   },
   "devDependencies": {
     "concurrently": "^9.2.0",
@@ -38,6 +39,7 @@
     "files": [
       "dist/**/*",
       "src/main/**/*",
+      "src/shared/**/*",
       "src/gallery/**/*",
       "frames/**/*.png",
       "frames/frames_manifest.json",
@@ -46,12 +48,20 @@
       "native/build/photobooth-camera-bridge.exe",
       "native/build/photobooth-gallery-backend.exe",
       "node_modules/ffmpeg-static/**/*",
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*",
+      "node_modules/detect-libc/**/*",
+      "node_modules/semver/**/*",
       "package.json"
     ],
     "asarUnpack": [
       "native/build/photobooth-camera-bridge.exe",
       "native/build/photobooth-gallery-backend.exe",
-      "node_modules/ffmpeg-static/ffmpeg.exe"
+      "node_modules/ffmpeg-static/ffmpeg.exe",
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*",
+      "node_modules/detect-libc/**/*",
+      "node_modules/semver/**/*"
     ],
     "win": {
       "target": [

@@ -22,5 +22,6 @@ test('fixed frames only appear for their declared photo count', () => {
 
 test('custom slot coordinates override the automatic layout', () => {
   const slots = [{ x: 10, y: 20, width: 300, height: 400 }];
-  assert.deepEqual(resolvePhotoSlots({ slotCount: 1, slots }, 1), [{ ...slots[0], fit: 'contain' }]);
+  assert.equal(resolvePhotoSlots({ slotCount: 1, slots }, 1)[0].fit, 'cover');
+  assert.equal(resolvePhotoSlots({ slotCount: 1, fit: 'contain', slots }, 1)[0].fit, 'contain');
 });

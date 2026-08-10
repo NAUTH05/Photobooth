@@ -97,6 +97,17 @@ export class LocalStore {
     });
   }
 
+  resolveArtifact(sessionId, artifactId, allowedKinds = []) {
+    const session = this.queue.sessions[sessionId];
+    if (!session) throw new Error('Session not found');
+    if (isExpired(session)) throw new Error('Gallery đã hết hạn');
+    const item = session.items?.find((candidate) => candidate.id === artifactId);
+    if (!item || item.deletedAt) throw new Error('Ảnh gốc không tồn tại');
+    if (allowedKinds.length && !allowedKinds.includes(item.kind)) throw new Error('Loại ảnh không hợp lệ để ghép frame');
+    if (!/\.jpe?g$/i.test(item.filename)) throw new Error('Compositor chỉ nhận JPEG gốc');
+    return { ...item };
+  }
+
   async finishSession(sessionId) {
     const session = this.queue.sessions[sessionId];
     if (!session) throw new Error('Session not found');

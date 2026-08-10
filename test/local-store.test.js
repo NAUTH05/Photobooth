@@ -31,6 +31,20 @@ test('recovers interrupted capture and only cleans checksum-verified uploads', a
   }
 });
 
+test('resolves only original JPEG artifacts from the same session', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'photobooth-resolve-'));
+  try {
+    const store = new LocalStore(root); await store.init();
+    const session = await store.createSession('photo');
+    const item = await store.saveArtifact({ sessionId: session.id, kind: 'photo-original', extension: 'jpg', bytes: jpeg });
+    assert.equal(store.resolveArtifact(session.id, item.id, ['photo-original']).id, item.id);
+    assert.throws(() => store.resolveArtifact(session.id, item.id, ['dslr-original']), /Loại ảnh/);
+    assert.throws(() => store.resolveArtifact('missing', item.id, ['photo-original']), /Session not found/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('rejects disguised images and removes an empty gallery instead of leaving an orphan', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'photobooth-validation-'));
   try {

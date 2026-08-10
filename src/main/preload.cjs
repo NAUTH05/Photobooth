@@ -13,7 +13,12 @@ contextBridge.exposeInMainWorld('photobooth', {
   },
   frames: {
     list: () => ipcRenderer.invoke('frames:list'),
-    sync: () => ipcRenderer.invoke('frames:sync')
+    sync: () => ipcRenderer.invoke('frames:sync'),
+    analyze: (frameId) => ipcRenderer.invoke('frames:analyze', frameId)
+  },
+  composite: {
+    preview: (payload) => ipcRenderer.invoke('composite:preview', payload),
+    create: (payload) => ipcRenderer.invoke('composite:create', payload)
   },
   drive: {
     authorize: (oauthClientFile) => ipcRenderer.invoke('drive:authorize', oauthClientFile)
@@ -33,7 +38,7 @@ contextBridge.exposeInMainWorld('photobooth', {
     health: () => ipcRenderer.invoke('native:health'),
     trigger: (sessionId) => ipcRenderer.invoke('native:trigger', sessionId)
   },
-  print: (dataUrl) => ipcRenderer.invoke('print:image', dataUrl),
+  print: (payload) => ipcRenderer.invoke('print:image', payload),
   onUploadStatus: (callback) => {
     const listener = (_event, value) => callback(value);
     ipcRenderer.on('upload:status', listener);
