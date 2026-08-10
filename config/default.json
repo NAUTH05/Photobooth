@@ -1,0 +1,67 @@
+{
+  "kiosk": false,
+  "locale": "vi-VN",
+  "camera": {
+    "mode": "webcam",
+    "deviceId": "",
+    "width": 1440,
+    "height": 1080,
+    "facingMode": "user",
+    "mirrorPreview": true,
+    "mirrorOutput": false,
+    "candidateCount": 6,
+    "captureWorkflow": "manual",
+    "countdownSeconds": 3,
+    "intervalSeconds": 1,
+    "dslr": {
+      "adapter": "external",
+      "program": "",
+      "args": ["--capture", "{output}"],
+      "timeoutMs": 30000
+    }
+  },
+  "drive": {
+    "enabled": false,
+    "rootFolderId": "",
+    "framesFolderId": "",
+    "serviceAccountFile": "",
+    "oauthClientFile": "",
+    "oauthRefreshToken": "",
+    "makeSessionPublic": true,
+    "syncFramesMinutes": 15
+  },
+  "storage": {
+    "retentionHoursAfterUpload": 24,
+    "cleanupMinutes": 10,
+    "maxRetryMinutes": 30
+  },
+  "gallery": {
+    "host": "0.0.0.0",
+    "port": 3847,
+    "publicBaseUrl": "",
+    "expirationDays": 7
+  },
+  "composite": {
+    "targetResolution": 1800,
+    "jpegQuality": 95,
+    "chroma444": false,
+    "qrEnabled": true,
+    "qrSizeStrip": 140,
+    "qrSizeStandard": 120,
+    "qrPosXFraction": 0.79,
+    "qrPosYFraction": 0.975
+  },
+  "print": {
+    "enabled": true,
+    "deviceName": "",
+    "silent": false,
+    "copies": 1,
+    "pageWidthMicrons": 101600,
+    "pageHeightMicrons": 152400
+  },
+  "branding": {
+    "name": "Roti Photobooth",
+    "tagline": "Giữ lại khoảnh khắc của bạn",
+    "accent": "#ef765e"
+  }
+}

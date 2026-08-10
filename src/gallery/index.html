@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#173c34" />
+    <title>Khoảnh khắc của bạn · Roti Photobooth</title>
+    <link rel="stylesheet" href="/assets/gallery.css" />
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <header class="hero">
+      <nav>
+        <a class="brand" href="#top" aria-label="Roti Photobooth">
+          <span class="brand-mark">R</span>
+          <span><strong>Roti</strong><small>PHOTOBOOTH</small></span>
+        </a>
+        <span class="secure-pill"><i></i> Link riêng tư</span>
+      </nav>
+      <div class="hero-copy" id="top">
+        <p class="kicker">YOUR MOMENTS, BEAUTIFULLY KEPT</p>
+        <h1>Khoảnh khắc<br /><em>của riêng bạn.</em></h1>
+        <div class="hero-meta">
+          <span id="sessionDate">Đang tải thời gian…</span>
+          <span class="dot">•</span>
+          <span id="expiryDate">Đang kiểm tra thời hạn…</span>
+        </div>
+      </div>
+      <a class="scroll-cue" href="#photos"><span>Khám phá bộ ảnh</span><b>↓</b></a>
+    </header>
+
+    <main id="photos">
+      <section class="section-head">
+        <div>
+          <p class="section-index">01 / GALLERY</p>
+          <h2>Những tấm hình<br />đáng nhớ nhất.</h2>
+        </div>
+        <p class="section-note">Chạm vào ảnh để xem toàn màn hình.<br />Tải bản gốc bất cứ lúc nào trước khi link hết hạn.</p>
+      </section>
+
+      <div class="gallery-grid" id="galleryGrid" aria-live="polite">
+        <div class="loading-card"><i></i><p>Đang mở bộ ảnh của bạn…</p></div>
+      </div>
+    </main>
+
+    <footer>
+      <div class="footer-mark">R</div>
+      <p><strong>Cảm ơn bạn đã ghé Roti.</strong><br />Mong những bức ảnh này luôn làm bạn mỉm cười.</p>
+      <a href="#top">Lên đầu trang ↑</a>
+    </footer>
+
+    <dialog id="lightbox">
+      <button class="close" aria-label="Đóng ảnh">×</button>
+      <button class="previous" aria-label="Ảnh trước">←</button>
+      <img alt="Ảnh photobooth phóng lớn" />
+      <button class="next" aria-label="Ảnh tiếp theo">→</button>
+      <a class="lightbox-download">Tải ảnh gốc ↓</a>
+    </dialog>
+
+    <script type="module" src="/assets/gallery.js"></script>
+  </body>
+</html>

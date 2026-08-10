@@ -1,0 +1,64 @@
+{
+  "name": "mobile-photobooth",
+  "version": "0.5.0",
+  "private": true,
+  "description": "Windows kiosk photobooth with webcam/DSLR bridge and Google Drive storage",
+  "author": "Roti Photobooth",
+  "main": "src/main/main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "build:renderer": "vite build",
+    "build:native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1",
+    "build": "npm run build:renderer && npm run build:native",
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "start": "electron .",
+    "test": "npm run build:native && node --test",
+    "check": "npm run build:renderer && npm test"
+  },
+  "dependencies": {
+    "googleapis": "^150.0.1",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0",
+    "cross-env": "^7.0.3",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.0.12",
+    "vite": "^7.0.6",
+    "wait-on": "^8.0.4"
+  },
+  "build": {
+    "appId": "vn.roti.photobooth",
+    "productName": "Roti Photobooth",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "src/main/**/*",
+      "src/gallery/**/*",
+      "frames/**/*.png",
+      "frames/frames_manifest.json",
+      ".env",
+      "config/**/*",
+      "native/build/photobooth-camera-bridge.exe",
+      "native/build/photobooth-gallery-backend.exe",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "native/build/photobooth-camera-bridge.exe",
+      "native/build/photobooth-gallery-backend.exe"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  }
+}

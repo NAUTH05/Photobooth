@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; object-src 'none'; base-uri 'none'; frame-src 'none'" />
+    <meta name="theme-color" content="#fff8f3" />
+    <title>Roti Photobooth</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <button class="brand" id="brandHome" aria-label="Trang chủ">
+          <span class="brand-mark">R</span>
+          <span><strong id="brandName">Roti Photobooth</strong><small id="brandTagline">Giữ lại khoảnh khắc của bạn</small></span>
+        </button>
+        <div class="top-actions">
+          <div class="queue-pill" id="queuePill"><i></i><span>Sẵn sàng</span></div>
+          <button class="icon-button" id="settingsButton" aria-label="Cài đặt">⚙</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="screen active" id="homeScreen">
+          <div class="hero-copy">
+            <p class="eyebrow">THE PHOTOBOOTH EXPERIENCE</p>
+            <h1>Chạm để bắt đầu.<br><em>Mỉm cười để nhớ mãi.</em></h1>
+            <p>Sáu khoảnh khắc, một tấm ảnh để đời — nhận ngay bản in và gallery riêng trên điện thoại.</p>
+            <div class="hero-facts"><span><b>01</b> Chụp ảnh</span><span><b>02</b> Chọn khung</span><span><b>03</b> Quét QR</span></div>
+          </div>
+          <div class="experience-panel">
+            <div class="poster-stack" aria-hidden="true"><i></i><i></i><div><span>READY?</span><strong>Say<br>cheese!</strong><small>ROTI PHOTOBOOTH · 2026</small></div></div>
+            <div class="mode-grid single-mode">
+              <button class="mode-card photo" data-mode="photo"><span class="mode-icon">●</span><span><strong>Bắt đầu phiên chụp</strong><small>Ảnh gốc · ảnh ghép 4×6 · gallery riêng tư</small></span><b>→</b></button>
+              <div class="photo-note"><strong>Ảnh được lưu local trước</strong><span>An toàn ngay cả khi Wi‑Fi chập chờn.</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen" id="frameScreen">
+          <div class="section-heading"><button class="back-button" id="backToSelection">←</button><div><p class="eyebrow">BƯỚC 3 / 3</p><h2>Chọn khung và xem trước kết quả</h2></div></div>
+          <div class="frame-stage">
+            <div class="frame-preview" id="framePreview"><div class="preview-smile">Đang dựng ảnh…</div><img id="framePreviewImage" alt="Xem trước ảnh đã ghép khung" /></div>
+            <div class="frame-options" id="frameOptions"></div>
+          </div>
+          <button class="primary-button" id="confirmFrame">Chốt ảnh này <span>→</span></button>
+        </section>
+
+        <section class="screen capture-screen" id="captureScreen">
+          <div class="camera-shell">
+            <video id="cameraVideo" autoplay muted playsinline></video>
+            <canvas id="cameraCanvas"></canvas>
+            <img id="liveFrame" alt="" />
+            <div class="camera-shade"></div>
+            <div class="countdown" id="countdown"></div>
+            <div class="capture-message" id="captureMessage">Nhấn nút để chụp ảnh 1</div>
+            <div class="shot-progress" id="shotProgress"></div>
+          </div>
+          <div class="capture-controls">
+            <button class="secondary-button" id="cancelCapture">Hủy</button>
+            <button class="shutter" id="shutterButton" aria-label="Bắt đầu chụp"><i></i></button>
+            <div class="camera-mode-label" id="cameraModeLabel">WEBCAM</div>
+          </div>
+        </section>
+
+        <section class="screen" id="selectionScreen">
+          <div class="section-heading"><button class="back-button" id="retakeAll">←</button><div><p class="eyebrow">BƯỚC 2 / 3</p><h2>Chọn những ảnh bạn thích nhất</h2><p class="selection-help">Có thể chọn từ 1 đến toàn bộ ảnh đã chụp. Khung phù hợp sẽ được lọc tự động.</p></div></div>
+          <div class="shot-selection" id="shotSelection"></div>
+          <div class="selection-actions"><span id="selectedCount">Chưa chọn ảnh</span><button class="primary-button" id="confirmShots" disabled>Chọn khung phù hợp <span>→</span></button></div>
+        </section>
+
+        <section class="screen" id="resultScreen">
+          <div class="result-layout">
+            <div class="result-media" id="resultMedia"></div>
+            <div class="result-copy">
+              <p class="eyebrow">XONG RỒI!</p>
+              <h2>Trông tuyệt lắm ✨</h2>
+              <p id="resultStatus">Ảnh đang được gửi lên Google Drive…</p>
+              <div class="qr-card" id="qrCard"><div class="qr-placeholder"><span>↻</span></div><small>QR sẽ hiện sau khi tải lên xong</small></div>
+              <div class="result-actions">
+                <button class="primary-button" id="printButton">🖨 In ảnh</button>
+                <button class="secondary-button" id="retakeButton">Chụp lại</button>
+                <button class="text-button" id="finishButton">Hoàn tất về trang chủ</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="settingsDialog">
+      <form method="dialog" id="settingsForm">
+        <div class="dialog-head"><div><p class="eyebrow">QUẢN TRỊ</p><h2>Cài đặt máy</h2></div><button class="icon-button" value="cancel">×</button></div>
+        <div class="tabs">
+          <button type="button" class="tab active" data-tab="camera">Camera</button>
+          <button type="button" class="tab" data-tab="drive">Google Drive</button>
+          <button type="button" class="tab" data-tab="system">Hệ thống</button>
+        </div>
+        <div class="tab-panel active" data-panel="camera">
+          <label>Chế độ camera<select name="camera.mode"><option value="webcam">Webcam</option><option value="dslr">DSLR / Canon bridge</option></select></label>
+          <label>Quy trình chụp<select name="camera.captureWorkflow"><option value="manual">Manual — nhấn nút cho từng ảnh</option><option value="auto">Auto — tự chụp liên tiếp</option></select></label>
+          <label>Webcam<select name="camera.deviceId" id="cameraDevice"></select></label>
+          <div class="field-row"><label class="toggle"><input name="camera.mirrorPreview" type="checkbox" /><span></span>Lật gương khi xem trước</label><label class="toggle"><input name="camera.mirrorOutput" type="checkbox" /><span></span>Lật gương file lưu/in</label></div>
+          <div class="field-row"><label>Số ảnh ứng viên<input name="camera.candidateCount" type="number" min="4" max="8" /></label><label>Đếm ngược (giây)<input name="camera.countdownSeconds" type="number" min="1" max="10" /></label></div>
+          <label>DSLR helper executable<input name="camera.dslr.program" placeholder="C:\\CanonBridge\\capture.exe" /></label>
+          <label>Arguments, mỗi dòng một tham số<textarea name="camera.dslr.args" rows="3" placeholder="--capture&#10;{output}"></textarea></label>
+          <div class="health-row"><span id="bridgeHealth">Chưa kiểm tra C++ bridge</span><button type="button" class="small-button" id="checkBridge">Kiểm tra</button></div>
+        </div>
+        <div class="tab-panel" data-panel="drive">
+          <label class="toggle"><input name="drive.enabled" type="checkbox" /><span></span>Bật Google Drive</label>
+          <label>Folder ID lưu phiên chụp<input name="drive.rootFolderId" /></label>
+          <label>Folder ID chứa khung<input name="drive.framesFolderId" /></label>
+          <label>Đường dẫn service-account.json<input name="drive.serviceAccountFile" /></label>
+          <div class="or-divider"><span>hoặc OAuth cho My Drive</span></div>
+          <label>Đường dẫn OAuth Desktop client JSON<input name="drive.oauthClientFile" id="oauthClientFile" /></label>
+          <button type="button" class="small-button" id="connectDrive">Kết nối tài khoản Google</button>
+          <label class="toggle"><input name="drive.makeSessionPublic" type="checkbox" /><span></span>Tạo link QR “anyone with link”</label>
+          <button type="button" class="small-button" id="syncFrames">Đồng bộ khung ngay</button>
+        </div>
+        <div class="tab-panel" data-panel="system">
+          <div class="backend-card"><span class="backend-dot"></span><div><strong>C++ Gallery Backend</strong><small id="backendHealth">Đang kiểm tra tiến trình…</small></div></div>
+          <label class="toggle"><input name="kiosk" type="checkbox" /><span></span>Toàn màn hình kiosk sau khi khởi động lại</label>
+          <label>Giữ file sau upload (giờ)<input name="storage.retentionHoursAfterUpload" type="number" min="0" max="168" step="0.5" /></label>
+          <label>Tên máy in<input name="print.deviceName" placeholder="Để trống để hiện hộp thoại in" /></label>
+          <label class="toggle"><input name="print.silent" type="checkbox" /><span></span>In trực tiếp, không hiện hộp thoại</label>
+          <label>Tên thương hiệu<input name="branding.name" /></label>
+          <label>Thông điệp<input name="branding.tagline" /></label>
+          <label>Cổng gallery local<input name="gallery.port" type="number" min="1024" max="65535" /></label>
+          <label>Domain gallery sau này<input name="gallery.publicBaseUrl" placeholder="Để trống để tự dùng IP LAN" /></label>
+          <label>Thời hạn gallery (ngày)<input name="gallery.expirationDays" type="number" min="1" max="90" /></label>
+          <div class="stats" id="queueStats"></div>
+        </div>
+        <div class="dialog-actions"><button class="secondary-button" value="cancel">Đóng</button><button class="primary-button" type="submit" value="default">Lưu cài đặt</button></div>
+      </form>
+    </dialog>
+    <div class="toast" id="toast"></div>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

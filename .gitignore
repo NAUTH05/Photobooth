@@ -1,0 +1,10 @@
+node_modules/
+dist/
+native/build/
+release/
+*.log
+config.local.json
+runtime-data/
+backend_python_test/
+.playwright-cli/
+output/
