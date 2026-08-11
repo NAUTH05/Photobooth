@@ -203,22 +203,6 @@ async function prepareRuntimeRoot(appPath) {
     await verifyWritable(runtimeRoot);
     console.warn(`Không thể ghi cạnh ứng dụng; dùng thư mục local ${runtimeRoot}`);
   }
-  const legacyRoot = fallbackRoot;
-  if (path.resolve(legacyRoot) !== path.resolve(runtimeRoot)) {
-    const legacyQueue = path.join(legacyRoot, 'upload-queue.json');
-    const targetQueue = path.join(runtimeRoot, 'upload-queue.json');
-    try {
-      await fs.access(targetQueue);
-    } catch {
-      try {
-        await fs.access(legacyQueue);
-        await fs.cp(legacyRoot, runtimeRoot, { recursive: true, errorOnExist: false, force: false });
-        await fs.access(targetQueue);
-      } catch (error) {
-        if (error.code !== 'ENOENT') throw new Error(`Không di chuyển được dữ liệu local cũ: ${error.message}`);
-      }
-    }
-  }
   return runtimeRoot;
 }
 
@@ -242,7 +226,7 @@ app.whenReady().then(async () => {
     encrypt: (value) => safeStorage.encryptString(value).toString('base64'),
     decrypt: (value) => safeStorage.decryptString(Buffer.from(value, 'base64'))
   } : null;
-  configStore = new ConfigStore(appPath, app.getPath('userData'), secretCodec);
+  configStore = new ConfigStore(appPath, runtimeRoot, secretCodec);
   await configStore.load();
   localStore = new LocalStore(runtimeRoot);
   await localStore.init();
