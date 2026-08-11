@@ -88,12 +88,40 @@ export class FrameManager {
     const frame = source.frames.find((candidate) => candidate.id === frameId) || this.automaticFrame(frameId);
     if (!frame) throw new Error('Frame not found');
     if (!frame.file) return { ...frame, width: Number(frame.width) || 1200, height: Number(frame.height) || 1800, slots: frame.slots ?? [] };
-    const filePath = this.framePath(frame);
+
+    let filePath = this.framePath(frame);
+    let isBundled = frame.source === 'bundled';
+
+    if (!isBundled) {
+      try {
+        await fs.access(filePath);
+      } catch {
+        if (this.bundledRoot) {
+          const fallbackPath = path.join(this.bundledRoot, path.basename(frame.file));
+          try {
+            await fs.access(fallbackPath);
+            filePath = fallbackPath;
+            isBundled = true;
+          } catch {}
+        }
+      }
+    }
+
     const stat = await fs.stat(filePath);
     const key = `${filePath}:${stat.size}:${stat.mtimeMs}`;
     const cached = this.analysisCache.get(key);
     if (cached) return { ...frame, ...cached, filePath };
-    const metadata = await sharp(filePath).metadata();
+
+    let metadata;
+    try {
+      metadata = await sharp(filePath).metadata();
+    } catch (err) {
+      if (!isBundled) {
+        try { await fs.unlink(filePath); } catch {}
+      }
+      throw new Error(`Khung ${frame.name} bị lỗi file hoặc không đọc được: ${err.message}`);
+    }
+
     if (!metadata.width || !metadata.height) throw new Error(`Không đọc được kích thước frame ${frame.name}`);
     let slots = Array.isArray(frame.slots) ? frame.slots : [];
     if (frame.inferSlots) {
