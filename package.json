@@ -41,8 +41,6 @@
       "src/main/**/*",
       "src/shared/**/*",
       "src/gallery/**/*",
-      "frames/**/*.png",
-      "frames/frames_manifest.json",
       ".env",
       "config/**/*",
       "native/build/photobooth-camera-bridge.exe",
@@ -53,6 +51,15 @@
       "node_modules/detect-libc/**/*",
       "node_modules/semver/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "frames",
+        "to": "frames",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "asarUnpack": [
       "native/build/photobooth-camera-bridge.exe",
