@@ -134,11 +134,30 @@ function registerIpc() {
     const config = configStore.get().print;
     if (!config.enabled) return { ok: false, error: 'Printing is disabled' };
     const request = typeof payload === 'string' ? { dataUrl: payload } : (payload || {});
-    const dataUrl = String(request.dataUrl || '');
+    let dataUrl = String(request.dataUrl || '');
     if (!dataUrl.startsWith('data:image/')) return { ok: false, error: 'Invalid image data' };
     const profile = String(request.profile || '4x6-portrait');
     const isLandscape = profile === '4x6-landscape';
     const isStrip = profile === '2x6';
+    if (isStrip) {
+      try {
+        const base64Data = dataUrl.replace(/^data:image\/[^;]+;base64,/, '');
+        const singleBuf = Buffer.from(base64Data, 'base64');
+        const meta = await (await import('sharp')).default(singleBuf).metadata();
+        if (meta.width && meta.height && meta.width < meta.height * 0.75) {
+          const stripW = meta.width;
+          const stripH = meta.height;
+          const sharpObj = (await import('sharp')).default;
+          const sheetBuf = await sharpObj({ create: { width: stripW * 2, height: stripH, channels: 3, background: '#ffffff' } })
+            .composite([{ input: singleBuf, left: 0, top: 0 }, { input: singleBuf, left: stripW, top: 0 }])
+            .jpeg({ quality: 98 })
+            .toBuffer();
+          dataUrl = `data:image/jpeg;base64,${sheetBuf.toString('base64')}`;
+        }
+      } catch (err) {
+        console.warn('Cannot duplicate strip for print:', err);
+      }
+    }
     const deviceName = isStrip ? (config.deviceName2Cut || config.deviceName) : config.deviceName;
     const offsetX = isLandscape
       ? (Number.isFinite(Number(config.offset4x6LandscapeX)) ? Number(config.offset4x6LandscapeX) : Number(config.offset4x6X) || Number(config.offsetX) || 0)

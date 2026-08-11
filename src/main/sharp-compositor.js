@@ -132,21 +132,14 @@ export class SharpCompositor {
       const qr = await sharp(qrBytes).resize(qrSize, qrSize).extend({ top: 6, bottom: 6, left: 6, right: 6, background: '#ffffff' }).png().toBuffer();
       top.push({ input: qr, left: Math.max(0, x - 6), top: Math.max(0, y - 6) });
     }
-    let rendered = await sharp(background).composite(top).png().toBuffer();
-    if (isStrip && !preview) {
-      rendered = await sharp({ create: { width: profile.width, height: profile.height, channels: 3, background: '#ffffff' } })
-        .composite([{ input: rendered, left: 0, top: 0 }, { input: rendered, left: profile.stripWidth, top: 0 }])
-        .png().toBuffer();
-    }
+    const rendered = await sharp(background).composite(top).png().toBuffer();
     const quality = Math.max(1, Math.min(100, Number(config.composite.jpegQuality) || 95));
     const density = Math.max(72, Number(config.composite.density) || 600);
     const bytes = await sharp(rendered)
       .withMetadata({ density })
       .jpeg({ quality, chromaSubsampling: config.composite.chroma444 ? '4:4:4' : '4:2:0' })
       .toBuffer();
-    const outWidth = (isStrip && !preview) ? profile.width : workingWidth;
-    const outHeight = (isStrip && !preview) ? profile.height : workingHeight;
-    const response = { bytes: Uint8Array.from(bytes), mimeType: 'image/jpeg', width: outWidth, height: outHeight, profile: profile.kind };
+    const response = { bytes: Uint8Array.from(bytes), mimeType: 'image/jpeg', width: workingWidth, height: workingHeight, profile: profile.kind };
     if (save) response.item = await this.localStore.saveArtifact({ sessionId, kind: 'photo-strip', extension: 'jpg', bytes, profile: profile.kind });
     return response;
   }
