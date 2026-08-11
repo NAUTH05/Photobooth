@@ -248,11 +248,15 @@ app.whenReady().then(async () => {
   await localStore.init();
   timelapseProcessor = new TimelapseProcessor(localStore, configStore);
   const driveFactory = (config) => new DriveClient(config);
+  const bundledFramesDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'frames')
+    : path.join(appPath, 'frames');
+  const framesCacheDir = path.join(runtimeRoot, 'frames');
   frameManager = new FrameManager(
-    path.join(app.getPath('userData'), 'frames'),
+    framesCacheDir,
     driveFactory,
     configStore,
-    configStore.get().frames.localDir
+    bundledFramesDir
   );
   await frameManager.init();
   sharpCompositor = new SharpCompositor(localStore, frameManager, configStore);

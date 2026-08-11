@@ -39,7 +39,10 @@ const envNumber = (value, fallback) => Number.isFinite(Number(value)) ? Number(v
 export function envConfigPatch(values, appPath) {
   const resolution = Math.max(1200, Math.min(7200, Math.round(envNumber(values.COMPOSITE_TARGET_RESOLUTION, 3600))));
   const port = Math.max(1024, Math.min(65535, Math.round(envNumber(values.PORT, 3847))));
-  const framesValue = values.LOCAL_FRAMES_DIR || './frames';
+  const defaultLocalFrames = (appPath.includes('app.asar') || appPath.endsWith('resources'))
+    ? path.join(path.dirname(appPath), 'frames')
+    : path.resolve(appPath, './frames');
+  const framesValue = values.LOCAL_FRAMES_DIR ? path.resolve(appPath, values.LOCAL_FRAMES_DIR) : defaultLocalFrames;
   const videoTimeFactor = Math.max(.125, Math.min(1, envNumber(values.VIDEO_SPEED, .5)));
   return {
     camera: {
@@ -47,7 +50,7 @@ export function envConfigPatch(values, appPath) {
       mirrorOutput: envBoolean(values.MIRROR_OUTPUT, false)
     },
     gallery: { port },
-    frames: { localDir: path.resolve(appPath, framesValue) },
+    frames: { localDir: framesValue },
     branding: {
       name: values.BRANDING_NAME || 'Roti Photobooth',
       tagline: values.BRANDING_TAGLINE || 'Giữ lại khoảnh khắc của bạn'
