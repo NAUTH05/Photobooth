@@ -160,16 +160,47 @@ function registerIpc() {
       }
     }
     const deviceName = isStrip ? (config.deviceName2Cut || config.deviceName) : config.deviceName;
-    const offsetX = isLandscape
-      ? (Number.isFinite(Number(config.offset4x6LandscapeX)) ? Number(config.offset4x6LandscapeX) : Number(config.offset4x6X) || Number(config.offsetX) || 0)
-      : (Number.isFinite(Number(config.offset4x6X)) ? Number(config.offset4x6X) : Number(config.offsetX) || 0);
-    const offsetY = isLandscape
-      ? (Number.isFinite(Number(config.offset4x6LandscapeY)) ? Number(config.offset4x6LandscapeY) : Number(config.offset4x6Y) || Number(config.offsetY) || 0)
-      : (Number.isFinite(Number(config.offset4x6Y)) ? Number(config.offset4x6Y) : Number(config.offsetY) || 0);
+    let offsetX = 0;
+    let offsetY = 0;
+    if (isStrip) {
+      offsetX = Number.isFinite(Number(config.offsetX)) ? Number(config.offsetX) : 0;
+      offsetY = Number.isFinite(Number(config.offsetY)) ? Number(config.offsetY) : 0;
+    } else if (isLandscape) {
+      offsetX = Number.isFinite(Number(config.offset4x6LandscapeX)) ? Number(config.offset4x6LandscapeX) : (Number(config.offset4x6X) || Number(config.offsetX) || 0);
+      offsetY = Number.isFinite(Number(config.offset4x6LandscapeY)) ? Number(config.offset4x6LandscapeY) : (Number(config.offset4x6Y) || Number(config.offsetY) || 0);
+    } else {
+      offsetX = Number.isFinite(Number(config.offset4x6X)) ? Number(config.offset4x6X) : (Number(config.offsetX) || 0);
+      offsetY = Number.isFinite(Number(config.offset4x6Y)) ? Number(config.offset4x6Y) : (Number(config.offsetY) || 0);
+    }
+
     const requestedCopies = Number.isFinite(Number(request.copies)) && Number(request.copies) >= 1
       ? Math.min(10, Math.round(Number(request.copies))) : undefined;
     const copies = requestedCopies ?? config.copies ?? 1;
-    const orientation = isLandscape ? 'landscape' : 'portrait';
+
+    let orientation = 'portrait';
+    let widthMm = 101.6;
+    let heightMm = 152.4;
+
+    try {
+      const base64Data = dataUrl.replace(/^data:image\/[^;]+;base64,/, '');
+      const meta = await (await import('sharp')).default(Buffer.from(base64Data, 'base64')).metadata();
+      const isPortrait = meta.height > meta.width;
+      if (isStrip || isPortrait) {
+        orientation = 'portrait';
+        widthMm = 101.6;
+        heightMm = 152.4;
+      } else {
+        orientation = 'landscape';
+        widthMm = 152.4;
+        heightMm = 101.6;
+      }
+    } catch {
+      if (isLandscape) {
+        orientation = 'landscape';
+        widthMm = 152.4;
+        heightMm = 101.6;
+      }
+    }
 
     if (process.platform === 'win32') {
       try {
@@ -186,9 +217,6 @@ function registerIpc() {
         const { promisify } = await import('node:util');
         const execFileAsync = promisify(execFile);
 
-        const widthMm = isLandscape ? 152.4 : 101.6;
-        const heightMm = isLandscape ? 101.6 : 152.4;
-
         const args = [
           '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath,
           '-printerName', deviceName || '',
@@ -199,7 +227,7 @@ function registerIpc() {
           '-heightMmStr', String(heightMm),
           '-orientation', orientation,
           '-enable2x6', isStrip ? 'true' : 'false',
-          '-targetDpi', String(configStore.get().composite?.density || 300)
+          '-targetDpi', '600'
         ];
 
         for (let i = 0; i < copies; i += 1) {
