@@ -59,6 +59,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "scripts",
+        "to": "scripts",
+        "filter": [
+          "print_image.ps1"
+        ]
       }
     ],
     "asarUnpack": [
