@@ -662,12 +662,25 @@ async function saveBlob(blob, kind, extension) {
   return window.photobooth.session.save({ sessionId: state.session.id, kind, extension, bytes });
 }
 
+async function ensureQrDataUrl() {
+  if (state.qrDataUrl && state.galleryUrl) return state.qrDataUrl;
+  if (!state.session?.id) return '';
+  try {
+    state.galleryUrl = await window.photobooth.gallery.url(state.session.id);
+    state.qrDataUrl = await QRCode.toDataURL(state.galleryUrl, { width: 260, margin: 1, errorCorrectionLevel: 'M' });
+  } catch (err) {
+    console.warn('Could not generate QR code data URL:', err);
+  }
+  return state.qrDataUrl;
+}
+
 async function finalizePhoto() {
   if (state.busy || !validateSlotAssignments(state.slotAssignments, selectedArtifactIds(), state.selectionTargetCount)) return;
   state.busy = true;
   const button = $('#confirmFrame');
   button.disabled = true; button.firstChild.textContent = 'Đang ghép ảnh… ';
   try {
+    await ensureQrDataUrl();
     await ensureFrameSlots(state.selectedFrame);
     const result = await window.photobooth.composite.create(compositePayload());
     const blob = bytesToBlob(result);
@@ -737,14 +750,11 @@ async function finishCapturePhase() {
     updateTimelapseStatus('error', 'Lỗi dừng timelapse');
   });
   stopCamera();
-  state.galleryUrl = await window.photobooth.gallery.url(state.session.id);
-  state.qrDataUrl = await QRCode.toDataURL(state.galleryUrl, { width: 260, margin: 1, errorCorrectionLevel: 'M' });
+  await ensureQrDataUrl();
   state.selectionTargetCount = Math.min(candidateCount(), state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4);
-  state.selectedShotIndexes = new Set(state.shots.slice(0, state.selectionTargetCount).map((_shot, index) => index));
+  state.selectedShotIndexes = new Set(state.shots.map((_shot, index) => index));
   state.slotAssignments = [];
-  $('#selectionTarget').value = String(state.selectionTargetCount);
-  renderShotSelection();
-  showScreen('selectionScreen');
+  openFrameSelection();
   scheduleDraftSave();
 }
 
@@ -792,9 +802,10 @@ function changeSelectionTarget(event) {
   scheduleDraftSave();
 }
 
-function openFrameSelection() {
-  if (state.selectedShotIndexes.size !== state.selectionTargetCount) return;
-  $('#frameScreen .section-heading h2').textContent = `Chọn khung phù hợp với ${state.selectionTargetCount} ảnh`;
+async function openFrameSelection() {
+  state.selectedShotIndexes = new Set(state.shots.map((_shot, index) => index));
+  await ensureQrDataUrl();
+  $('#frameScreen .section-heading h2').textContent = `Chọn khung và sắp xếp ảnh (${state.shots.length} ảnh đã chụp)`;
   ensureAssignments();
   showScreen('frameScreen');
   renderFrames();
@@ -924,14 +935,11 @@ async function reopenSession(sessionId) {
       state.shots.push({ artifactId: saved.id, kind: saved.kind, dataUrl: url });
       state.photoTransforms[saved.id] = { panX: 50, panY: 50, zoom: 1, rotation: 0 };
     }
-    state.galleryUrl = await window.photobooth.gallery.url(newSession.id);
-    state.qrDataUrl = await QRCode.toDataURL(state.galleryUrl, { width: 260, margin: 1, errorCorrectionLevel: 'M' });
+    await ensureQrDataUrl();
     state.selectionTargetCount = state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4;
-    state.selectedShotIndexes = new Set(state.shots.slice(0, state.selectionTargetCount).map((_, i) => i));
+    state.selectedShotIndexes = new Set(state.shots.map((_, i) => i));
     state.slotAssignments = [];
-    $('#selectionTarget').value = String(state.selectionTargetCount);
-    renderShotSelection();
-    showScreen('selectionScreen');
+    openFrameSelection();
   } catch (error) {
     toast(`Không mở được phiên: ${error.message}`); console.error(error);
   } finally {
@@ -992,21 +1000,14 @@ async function resumeSession(sessionId) {
       state.recoveryShotUrls.add(url);
       return { artifactId: item.id, kind: item.kind, dataUrl: url };
     });
-    state.galleryUrl = await window.photobooth.gallery.url(sessionId);
-    state.qrDataUrl = await QRCode.toDataURL(state.galleryUrl, { width: 260, margin: 1, errorCorrectionLevel: 'M' });
+    await ensureQrDataUrl();
     const draft = sessionValue.draft || {};
     state.selectionTargetCount = normalizeTargetCount(draft.targetCount, state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4);
-    const indexesById = new Map(state.shots.map((shot, index) => [shot.artifactId, index]));
-    const selectedIds = (draft.selectedArtifactIds || []).filter((id) => indexesById.has(id)).slice(0, state.selectionTargetCount);
-    if (selectedIds.length < state.selectionTargetCount) {
-      for (const shot of state.shots) if (!selectedIds.includes(shot.artifactId) && selectedIds.length < state.selectionTargetCount) selectedIds.push(shot.artifactId);
-    }
-    state.selectedShotIndexes = new Set(selectedIds.map((id) => indexesById.get(id)));
+    state.selectedShotIndexes = new Set(state.shots.map((_, index) => index));
     state.photoTransforms = structuredClone(draft.transforms || {});
     state.shots.forEach((shot) => { state.photoTransforms[shot.artifactId] ??= { panX: 50, panY: 50, zoom: 1, rotation: 0 }; });
     state.slotAssignments = Array.isArray(draft.slotAssignments) ? draft.slotAssignments.slice(0, state.selectionTargetCount) : [];
     state.selectedFrame = state.frames.find((frame) => frame.id === draft.frameId) || state.selectedFrame;
-    $('#selectionTarget').value = String(state.selectionTargetCount);
     if (state.shots.length < state.selectionTargetCount) {
       state.captureGeneration += 1;
       const count = state.selectionTargetCount;
@@ -1020,8 +1021,9 @@ async function resumeSession(sessionId) {
       if (state.shots.length >= 4) $('#captureNextButton').hidden = false;
       await startCamera();
       startTimelapseRecording();
-    } else if (draft.step === 'frame' && state.selectedShotIndexes.size === state.selectionTargetCount) openFrameSelection();
-    else { renderShotSelection(); showScreen('selectionScreen'); }
+    } else {
+      openFrameSelection();
+    }
   } catch (error) {
     toast(`Không khôi phục được phiên: ${error.message}`);
     console.error(error);
@@ -1046,6 +1048,7 @@ async function restoreResultSession(sessionId) {
     state.resultProfile = result.profile || '4x6-portrait';
     state.resultArtifactId = result.item.id;
     state.galleryUrl = result.galleryUrl;
+    await ensureQrDataUrl();
     showResult();
     await showQr(result.galleryUrl);
   } catch (error) {
@@ -1102,6 +1105,7 @@ function showResult() {
 
 async function changeFrameFromResult() {
   if (state.busy || !state.session) return;
+  await ensureQrDataUrl();
   if (!state.shots.length) {
     state.busy = true;
     try {
@@ -1117,7 +1121,7 @@ async function changeFrameFromResult() {
         state.photoTransforms[item.id] = { panX: 50, panY: 50, zoom: 1, rotation: 0 };
       }
       state.selectionTargetCount = state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4;
-      state.selectedShotIndexes = new Set(state.shots.slice(0, state.selectionTargetCount).map((_, i) => i));
+      state.selectedShotIndexes = new Set(state.shots.map((_, i) => i));
       state.slotAssignments = [];
     } catch (error) {
       toast(`Lỗi đọc ảnh gốc: ${error.message}`);
@@ -1468,7 +1472,10 @@ async function init() {
   $('#selectionTarget').onchange = changeSelectionTarget;
   $('#zoomComposition').onclick = () => { if (state.framePreviewUrl) openZoom(state.framePreviewUrl); };
   $('#captureNextButton').onclick = () => { if (!state.busy) finishCapturePhase().catch((error) => toast(error.message)); };
-  $('#backToSelection').onclick = () => { showScreen('selectionScreen'); renderShotSelection(); scheduleDraftSave('selection'); };
+  $('#backToSelection').onclick = () => {
+    if (state.navigatedFromSessions) openSessionsScreen();
+    else openCapture();
+  };
   $('#retakeAll').onclick = () => {
     if (state.navigatedFromSessions) openSessionsScreen();
     else openCapture();
