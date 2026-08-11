@@ -75,64 +75,9 @@ export class LocalStore {
         this.queue = JSON.parse(text);
       }
     } catch (error) {
-      if (error.code !== 'ENOENT') {
-        console.warn(`Hàng đợi local bị lỗi (${error.message}), đang khôi phục hàng đợi...`);
-        try {
-          await fs.copyFile(this.queuePath, `${this.queuePath}.corrupted_${Date.now()}`);
-        } catch { }
-      }
+      if (error.code !== 'ENOENT') throw new Error(`Không đọc được hàng đợi local: ${error.message}`);
     }
-    this.queue ??= {};
     this.queue.sessions ??= {};
-
-    try {
-      const entries = await fs.readdir(this.sessionsRoot, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const folderName = entry.name;
-        const existing = Object.values(this.queue.sessions).find((s) => s.folderName === folderName);
-        if (!existing) {
-          const folderPath = path.join(this.sessionsRoot, folderName);
-          const files = await fs.readdir(folderPath).catch(() => []);
-          if (files.length > 0) {
-            const id = `PB_${folderName}`;
-            const nowIso = new Date().toISOString();
-            const items = [];
-            for (const file of files) {
-              const filePath = path.join(folderPath, file);
-              const stat = await fs.stat(filePath).catch(() => null);
-              if (!stat || !stat.isFile()) continue;
-              const kind = file.includes('photo-strip') ? 'photo-strip' : (file.includes('dslr') ? 'dslr-original' : 'photo-original');
-              items.push({
-                id: crypto.randomUUID(),
-                kind,
-                filename: file,
-                path: filePath,
-                size: stat.size,
-                status: 'pending',
-                createdAt: stat.birthtime?.toISOString() || nowIso
-              });
-            }
-            if (items.length > 0) {
-              const resultItem = items.find((i) => i.kind === 'photo-strip');
-              this.queue.sessions[id] = {
-                id,
-                folderName,
-                mode: 'photo',
-                createdAt: items[0]?.createdAt || nowIso,
-                status: 'recoverable',
-                items,
-                attempts: 0,
-                galleryToken: crypto.randomBytes(18).toString('base64url'),
-                expiresAt: new Date(Date.now() + 7 * 86400000).toISOString(),
-                result: resultItem ? { artifactId: resultItem.id, profile: '4x6-portrait', readyAt: resultItem.createdAt, acknowledgedAt: null } : null
-              };
-            }
-          }
-        }
-      }
-    } catch { }
-
     let recovered = false;
     for (const session of Object.values(this.queue.sessions)) {
       session.items ??= [];
@@ -171,7 +116,7 @@ export class LocalStore {
         recovered = true;
       }
     }
-    await this.persist();
+    if (recovered) await this.persist();
   }
 
   sessionPath(sessionId) {
