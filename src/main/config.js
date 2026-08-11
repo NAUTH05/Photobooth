@@ -53,6 +53,11 @@ export function envConfigPatch(values, appPath) {
       tagline: values.BRANDING_TAGLINE || 'Giữ lại khoảnh khắc của bạn'
     },
     print: {
+      enabled: envBoolean(values.PRINT_ENABLED, true),
+      silent: envBoolean(values.PRINT_SILENT, false),
+      copies: Math.max(1, Math.min(10, Math.round(envNumber(values.PRINT_COPIES, 1)))),
+      pageWidthMicrons: Math.max(0, Math.round(envNumber(values.PRINT_PAGE_WIDTH_MICRONS, 101600))),
+      pageHeightMicrons: Math.max(0, Math.round(envNumber(values.PRINT_PAGE_HEIGHT_MICRONS, 152400))),
       deviceName: values.PRINTER_NAME || '',
       deviceName2Cut: values.PRINTER_NAME_2CUT || '',
       offsetX: envNumber(values.PRINT_OFFSET_X, 0),
@@ -70,8 +75,8 @@ export function envConfigPatch(values, appPath) {
       density: Math.max(72, Math.min(1200, Math.round(envNumber(values.COMPOSITE_DENSITY, 600)))),
       holeOutsetPx: Math.max(0, Math.min(30, envNumber(values.HOLE_OUTSET_PX, 3))),
       qrEnabled: envBoolean(values.ENABLE_QR_ON_FRAME, true),
-      qrSizeStrip: Math.max(60, Math.round(envNumber(values.QR_SIZE_STRIP, 140))),
-      qrSizeStandard: Math.max(60, Math.round(envNumber(values.QR_SIZE_STANDARD, 120))),
+      qrSizeStrip: Math.max(50, Math.round(envNumber(values.QR_SIZE_STRIP, 92))),
+      qrSizeStandard: Math.max(50, Math.round(envNumber(values.QR_SIZE_STANDARD, 80))),
       qrPosXFraction: Math.max(0, Math.min(1, envNumber(values.QR_POS_X_FRACTION, .79))),
       qrPosYFraction: Math.max(0, Math.min(1, envNumber(values.QR_POS_Y_FRACTION, .975)))
     },
@@ -113,13 +118,13 @@ export class ConfigStore {
   async load() {
     const defaults = JSON.parse(await fs.readFile(this.defaultPath, 'utf8'));
     let envValues = {};
-    try { envValues = parseEnv(await fs.readFile(path.join(path.dirname(this.defaultPath), '..', '.env'), 'utf8')); } catch {}
+    try { envValues = parseEnv(await fs.readFile(path.join(path.dirname(this.defaultPath), '..', '.env'), 'utf8')); } catch { }
     let user = {};
-    try { user = JSON.parse(await fs.readFile(this.userPath, 'utf8')); } catch {}
+    try { user = JSON.parse(await fs.readFile(this.userPath, 'utf8')); } catch { }
     if (user.drive?.oauthRefreshTokenEncrypted && this.secretCodec) {
-      try { user.drive.oauthRefreshToken = this.secretCodec.decrypt(user.drive.oauthRefreshTokenEncrypted); } catch {}
+      try { user.drive.oauthRefreshToken = this.secretCodec.decrypt(user.drive.oauthRefreshTokenEncrypted); } catch { }
     }
-    this.value = merge(merge(defaults, user), envConfigPatch(envValues, path.dirname(path.dirname(this.defaultPath))));
+    this.value = merge(merge(defaults, envConfigPatch(envValues, path.dirname(path.dirname(this.defaultPath)))), user);
     return this.value;
   }
 

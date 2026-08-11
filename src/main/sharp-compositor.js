@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import sharp from 'sharp';
 import { coverCropRect, expandRect, normalizePhotoTransform, scaleRect } from '../shared/image-layout.js';
 import { DEFAULT_FOOTER_HEIGHT, outputProfile, PRINT_HEIGHT, PRINT_WIDTH, resolvePhotoSlots } from '../shared/photo-layout.js';
@@ -29,13 +30,19 @@ export class SharpCompositor {
     this.localStore = localStore;
     this.frameManager = frameManager;
     this.configStore = configStore;
+    this.overlayCache = new Map();
   }
 
   async render({ sessionId, artifactIds, frameId, transforms = {}, qrDataUrl = '', preview = false, save = false }) {
     if (!Array.isArray(artifactIds) || artifactIds.length < 1 || artifactIds.length > 8) throw new Error('Số ảnh ghép không hợp lệ');
+    if (!preview) {
+      if (artifactIds.some((artifactId) => typeof artifactId !== 'string' || !artifactId) || new Set(artifactIds).size !== artifactIds.length) {
+        throw new Error('Danh sách ảnh ghép không hợp lệ hoặc bị trùng');
+      }
+    }
     const config = this.configStore.get();
     const frame = await this.frameManager.resolve(frameId);
-    if (Number(frame.slotCount) !== artifactIds.length && frame.slotCount !== 'any') throw new Error('Số ảnh không khớp frame');
+    if (!preview && Number(frame.slotCount) !== artifactIds.length && frame.slotCount !== 'any') throw new Error('Số ảnh không khớp frame');
     const target = preview ? Number(config.composite.previewResolution) || 1200 : Number(config.composite.targetResolution) || 3600;
     const profile = outputProfile(frame, target);
     const isStrip = profile.kind === '2x6';
@@ -49,10 +56,18 @@ export class SharpCompositor {
     const composites = [];
 
     for (let index = 0; index < artifactIds.length; index += 1) {
-      const item = this.localStore.resolveArtifact(sessionId, artifactIds[index], ['photo-original', 'dslr-original']);
-      const transform = normalizePhotoTransform(transforms[item.id] || transforms[index] || slots[index]);
+      if (!artifactIds[index]) continue;
+      let item = null;
+      try {
+        item = this.localStore.resolveArtifact(sessionId, artifactIds[index], ['photo-original', 'dslr-original']);
+      } catch (err) {
+        if (preview) continue;
+        throw err;
+      }
+      if (!item) continue;
+      const transform = normalizePhotoTransform(transforms[item.id] || transforms[artifactIds[index]] || transforms[index] || slots[index]);
       const rotation = transform.rotation;
-      const metadata = await sharp(item.path).metadata();
+      const metadata = await sharp(item.path, { failOn: 'none' }).metadata();
       let sourceWidth = metadata.width;
       let sourceHeight = metadata.height;
       if (!sourceWidth || !sourceHeight) throw new Error('Không đọc được kích thước JPEG gốc');
@@ -61,14 +76,29 @@ export class SharpCompositor {
       const scaledSlot = scaleRect(slots[index], scaleX, scaleY);
       const outset = (Number(config.composite.holeOutsetPx) || 3) * Math.max(scaleX, scaleY);
       const placement = expandRect(scaledSlot, outset, { width: workingWidth, height: workingHeight });
-      const targetWidth = rotatedQuarter ? placement.height : placement.width;
-      const targetHeight = rotatedQuarter ? placement.width : placement.height;
-      const crop = integerRect(coverCropRect(sourceWidth, sourceHeight, targetWidth, targetHeight, transform));
-      let pipeline = sharp(item.path).autoOrient().extract(crop).resize(Math.round(targetWidth), Math.round(targetHeight), { fit: 'fill' });
-      if (rotation) pipeline = pipeline.rotate(rotation, { background: '#ffffff' });
-      let input = await pipeline.jpeg({ quality: 100, chromaSubsampling: '4:4:4' }).toBuffer();
-      if (rotation % 90 !== 0) {
-        input = await sharp(input).resize(Math.round(placement.width), Math.round(placement.height), { fit: 'cover' }).toBuffer();
+      const placementWidth = Math.max(1, Math.round(placement.width));
+      const placementHeight = Math.max(1, Math.round(placement.height));
+      let input;
+      if (slots[index].fit === 'contain') {
+        let pipeline = sharp(item.path, { failOn: 'none' }).autoOrient();
+        if (rotation) pipeline = pipeline.rotate(rotation, { background: { r: 0, g: 0, b: 0, alpha: 0 } });
+        input = await pipeline
+          .resize(placementWidth, placementHeight, {
+            fit: 'contain',
+            background: { r: 0, g: 0, b: 0, alpha: 0 }
+          })
+          .png()
+          .toBuffer();
+      } else {
+        const targetWidth = rotatedQuarter ? placement.height : placement.width;
+        const targetHeight = rotatedQuarter ? placement.width : placement.height;
+        const crop = integerRect(coverCropRect(sourceWidth, sourceHeight, targetWidth, targetHeight, transform));
+        let pipeline = sharp(item.path, { failOn: 'none' }).autoOrient().extract(crop).resize(Math.round(targetWidth), Math.round(targetHeight), { fit: 'fill' });
+        if (rotation) pipeline = pipeline.rotate(rotation, { background: '#ffffff' });
+        input = await pipeline.jpeg({ quality: 100, chromaSubsampling: '4:4:4' }).toBuffer();
+        if (rotation % 90 !== 0) {
+          input = await sharp(input).resize(placementWidth, placementHeight, { fit: 'cover' }).toBuffer();
+        }
       }
       composites.push({ input, left: Math.round(placement.x), top: Math.round(placement.y) });
     }
@@ -77,9 +107,21 @@ export class SharpCompositor {
       .composite(composites)
       .png()
       .toBuffer();
-    const overlay = frame.filePath
-      ? await sharp(frame.filePath).resize(workingWidth, workingHeight, { fit: 'fill' }).png().toBuffer()
-      : svgOverlay(frame, workingWidth, workingHeight, config.branding);
+
+    let overlay;
+    if (frame.filePath) {
+      const stat = await fs.stat(frame.filePath).catch(() => null);
+      const cacheKey = stat ? `${frame.filePath}:${stat.size}:${stat.mtimeMs}:${workingWidth}:${workingHeight}` : `${frame.filePath}:${workingWidth}:${workingHeight}`;
+      if (this.overlayCache.has(cacheKey)) {
+        overlay = this.overlayCache.get(cacheKey);
+      } else {
+        overlay = await sharp(frame.filePath).resize(workingWidth, workingHeight, { fit: 'fill' }).png().toBuffer();
+        this.overlayCache.set(cacheKey, overlay);
+        if (this.overlayCache.size > 40) this.overlayCache.delete(this.overlayCache.keys().next().value);
+      }
+    } else {
+      overlay = svgOverlay(frame, workingWidth, workingHeight, config.branding);
+    }
     const top = [{ input: overlay, left: 0, top: 0 }];
     if (qrDataUrl && config.composite.qrEnabled !== false) {
       const qrBytes = Buffer.from(qrDataUrl.slice(qrDataUrl.indexOf(',') + 1), 'base64');
@@ -91,7 +133,7 @@ export class SharpCompositor {
       top.push({ input: qr, left: Math.max(0, x - 6), top: Math.max(0, y - 6) });
     }
     let rendered = await sharp(background).composite(top).png().toBuffer();
-    if (isStrip) {
+    if (isStrip && !preview) {
       rendered = await sharp({ create: { width: profile.width, height: profile.height, channels: 3, background: '#ffffff' } })
         .composite([{ input: rendered, left: 0, top: 0 }, { input: rendered, left: profile.stripWidth, top: 0 }])
         .png().toBuffer();
@@ -102,8 +144,10 @@ export class SharpCompositor {
       .withMetadata({ density })
       .jpeg({ quality, chromaSubsampling: config.composite.chroma444 ? '4:4:4' : '4:2:0' })
       .toBuffer();
-    const response = { bytes: Uint8Array.from(bytes), mimeType: 'image/jpeg', width: profile.width, height: profile.height, profile: profile.kind };
-    if (save) response.item = await this.localStore.saveArtifact({ sessionId, kind: 'photo-strip', extension: 'jpg', bytes });
+    const outWidth = (isStrip && !preview) ? profile.width : workingWidth;
+    const outHeight = (isStrip && !preview) ? profile.height : workingHeight;
+    const response = { bytes: Uint8Array.from(bytes), mimeType: 'image/jpeg', width: outWidth, height: outHeight, profile: profile.kind };
+    if (save) response.item = await this.localStore.saveArtifact({ sessionId, kind: 'photo-strip', extension: 'jpg', bytes, profile: profile.kind });
     return response;
   }
 }

@@ -49,8 +49,8 @@
     "density": 600,
     "holeOutsetPx": 3,
     "qrEnabled": true,
-    "qrSizeStrip": 140,
-    "qrSizeStandard": 120,
+    "qrSizeStrip": 175,
+    "qrSizeStandard": 145,
     "qrPosXFraction": 0.79,
     "qrPosYFraction": 0.975
   },

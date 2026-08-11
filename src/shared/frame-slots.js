@@ -59,6 +59,36 @@ export function detectTransparentSlots(data, width, height, expectedCount, targe
     if (selected.length === expectedCount) break;
   }
   if (selected.length !== expectedCount) return [];
+  // When a 2-strip frame PNG is used, selected slots may span both columns.
+  // Prefer a single-column solution using only left-half candidates.
+  const midX = width / 2;
+  const leftSelected = selected.filter((c) => (c.minX + c.maxX) / 2 < midX);
+  if (leftSelected.length > 0 && leftSelected.length < expectedCount) {
+    const leftCandidates = candidates.filter((c) => (c.minX + c.maxX) / 2 < midX);
+    if (leftCandidates.length >= expectedCount) {
+      const leftOnly = [];
+      for (const component of leftCandidates) {
+        const overlaps = leftOnly.some((cur) => {
+          const il = Math.max(component.minX, cur.minX); const it = Math.max(component.minY, cur.minY);
+          const ir = Math.min(component.maxX, cur.maxX); const ib = Math.min(component.maxY, cur.maxY);
+          return ir >= il && ib >= it && (ir - il + 1) * (ib - it + 1) / Math.min(component.area, cur.area) > .5;
+        });
+        if (!overlaps) leftOnly.push(component);
+        if (leftOnly.length === expectedCount) break;
+      }
+      if (leftOnly.length === expectedCount) {
+        return leftOnly
+          .sort((a, b) => Math.abs(a.minY - b.minY) > targetHeight * .01 ? a.minY - b.minY : a.minX - b.minX)
+          .map((component) => ({
+            x: Math.max(0, Math.round(component.minX / width * targetWidth)),
+            y: Math.max(0, Math.round(component.minY / height * targetHeight)),
+            width: Math.min(targetWidth, Math.round(component.width / width * targetWidth)),
+            height: Math.min(targetHeight, Math.round(component.height / height * targetHeight)),
+            fit: options.defaultFit === 'contain' ? 'contain' : 'cover'
+          }));
+      }
+    }
+  }
   return selected
     .map((component) => ({
       x: Math.max(0, Math.round(component.minX / width * targetWidth)),

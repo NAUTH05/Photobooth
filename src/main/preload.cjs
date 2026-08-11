@@ -9,7 +9,16 @@ contextBridge.exposeInMainWorld('photobooth', {
     create: (mode) => ipcRenderer.invoke('session:create', mode),
     save: (payload) => ipcRenderer.invoke('artifact:save', payload),
     finish: (id) => ipcRenderer.invoke('session:finish', id),
-    cancel: (id) => ipcRenderer.invoke('session:cancel', id)
+    cancel: (id) => ipcRenderer.invoke('session:cancel', id),
+    listRecoverable: () => ipcRenderer.invoke('session:list-recoverable'),
+    listResults: () => ipcRenderer.invoke('session:list-results'),
+    restoreResult: (id) => ipcRenderer.invoke('session:restore-result', id),
+    acknowledgeResult: (id) => ipcRenderer.invoke('session:acknowledge-result', id),
+    resume: (id) => ipcRenderer.invoke('session:resume', id),
+    readOriginals: (payload) => ipcRenderer.invoke('session:read-originals', payload),
+    readOriginalsAny: (payload) => ipcRenderer.invoke('session:read-originals-any', payload),
+    listAll: () => ipcRenderer.invoke('session:list-all'),
+    saveDraft: (payload) => ipcRenderer.invoke('session:save-draft', payload)
   },
   frames: {
     list: () => ipcRenderer.invoke('frames:list'),

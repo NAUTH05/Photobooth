@@ -23,6 +23,7 @@ export class FrameManager {
     this.manifestPath = path.join(cacheRoot, 'manifest.json');
     this.lastSync = null;
     this.analysisCache = new Map();
+    this.previewCache = new Map();
   }
 
   async init() {
@@ -58,8 +59,15 @@ export class FrameManager {
             : path.join(this.cacheRoot, path.basename(frame.previewFile))
           : this.framePath(frame);
         try {
-          const preview = await sharp(target).resize({ width: 280, height: 280, fit: 'inside', withoutEnlargement: true }).png().toBuffer();
-          previewDataUrl = `data:image/png;base64,${preview.toString('base64')}`;
+          const stat = await fs.stat(target).catch(() => null);
+          const cacheKey = stat ? `${target}:${stat.size}:${stat.mtimeMs}` : target;
+          if (this.previewCache.has(cacheKey)) {
+            previewDataUrl = this.previewCache.get(cacheKey);
+          } else {
+            const preview = await sharp(target).resize({ width: 280, height: 280, fit: 'inside', withoutEnlargement: true }).png().toBuffer();
+            previewDataUrl = `data:image/png;base64,${preview.toString('base64')}`;
+            if (cacheKey) this.previewCache.set(cacheKey, previewDataUrl);
+          }
         } catch {}
       }
       frames.push({ ...frame, dataUrl: previewDataUrl, previewDataUrl });
@@ -92,7 +100,7 @@ export class FrameManager {
       if (!metadata.hasAlpha) throw new Error(`Frame ${frame.name} không có alpha trong suốt`);
       const sampleWidth = Math.min(600, metadata.width);
       const sample = await sharp(filePath).resize({ width: sampleWidth }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-      slots = detectTransparentSlots(sample.data, sample.info.width, sample.info.height, Number(frame.slotCount), metadata.width, metadata.height, { alphaThreshold: 49, defaultFit: 'cover' });
+      slots = detectTransparentSlots(sample.data, sample.info.width, sample.info.height, Number(frame.slotCount), metadata.width, metadata.height, { alphaThreshold: 49, defaultFit: frame.fit });
       if (slots.length !== Number(frame.slotCount)) throw new Error(`Không dò được ${frame.slotCount} vùng ảnh trong frame ${frame.name}`);
     }
     const result = { width: metadata.width, height: metadata.height, slots };

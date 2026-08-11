@@ -15,7 +15,7 @@ test('uploads a queued session and verifies its checksum', async () => {
     const store = new LocalStore(root); await store.init();
     const session = await store.createSession('photo');
     const bytes = jpeg;
-    await store.saveArtifact({ sessionId: session.id, kind: 'photo-strip', extension: 'jpg', bytes });
+    await store.saveArtifact({ sessionId: session.id, kind: 'photo-strip', extension: 'jpg', bytes, profile: '4x6-portrait' });
     await store.finishSession(session.id);
     const drive = {
       createSessionFolder: async () => ({ id: 'folder-1', webViewLink: 'https://drive.example/folder-1' }),
@@ -61,7 +61,7 @@ test('never uploads a gallery after its expiration time', async () => {
   try {
     const store = new LocalStore(root); await store.init();
     const session = await store.createSession('photo');
-    await store.saveArtifact({ sessionId: session.id, kind: 'photo-strip', extension: 'jpg', bytes: jpeg });
+    await store.saveArtifact({ sessionId: session.id, kind: 'photo-strip', extension: 'jpg', bytes: jpeg, profile: '4x6-portrait' });
     await store.finishSession(session.id);
     await store.mutate(session.id, (value) => { value.expiresAt = new Date(Date.now() - 1000).toISOString(); });
     let uploads = 0;

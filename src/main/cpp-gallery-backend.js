@@ -49,31 +49,41 @@ export class CppGalleryBackend {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe']
     });
+    const child = this.process;
     const stderr = [];
-    this.process.stderr.on('data', (chunk) => stderr.push(chunk.toString()));
-    const lines = readline.createInterface({ input: this.process.stdout });
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('C++ gallery backend khởi động quá thời gian')), 8000);
-      const fail = (error) => {
-        clearTimeout(timer);
-        reject(new Error(`Không khởi động được C++ gallery backend: ${error?.message || stderr.join('').trim() || 'unknown error'}`));
-      };
-      this.process.once('error', fail);
-      this.process.once('exit', (code) => {
-        if (this.port == null) fail(new Error(`process exited with code ${code}: ${stderr.join('').trim()}`));
-        else this.port = null;
+    child.stderr.on('data', (chunk) => stderr.push(chunk.toString()));
+    const lines = readline.createInterface({ input: child.stdout });
+    try {
+      await new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (callback, value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          callback(value);
+        };
+        const fail = (error) => finish(reject, new Error(`Không khởi động được C++ gallery backend: ${error?.message || stderr.join('').trim() || 'unknown error'}`));
+        const timer = setTimeout(() => fail(new Error('khởi động quá thời gian')), 8000);
+        child.once('error', fail);
+        child.once('exit', (code) => {
+          if (this.port == null) fail(new Error(`process exited with code ${code}: ${stderr.join('').trim()}`));
+          else this.port = null;
+        });
+        lines.on('line', (line) => {
+          try {
+            const event = JSON.parse(line);
+            if (event.ready && Number.isInteger(event.port)) {
+              this.port = event.port;
+              finish(resolve);
+            }
+          } catch {}
+        });
       });
-      lines.on('line', (line) => {
-        try {
-          const event = JSON.parse(line);
-          if (event.ready && Number.isInteger(event.port)) {
-            this.port = event.port;
-            clearTimeout(timer);
-            resolve();
-          }
-        } catch {}
-      });
-    });
+    } catch (error) {
+      lines.close();
+      if (this.process === child) this.stop();
+      throw error;
+    }
   }
 
   stop() {
