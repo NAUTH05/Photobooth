@@ -158,7 +158,11 @@ export class LocalStore {
     const session = this.queue.sessions[sessionId];
     if (!session) throw new Error('Session not found');
     if (isExpired(session)) throw new Error('Gallery đã hết hạn');
-    if (session.status !== 'capturing') throw new Error('Session không còn nhận ảnh');
+    if (kind === 'photo-strip') {
+      if (['cancelled', 'failed'].includes(session.status)) throw new Error('Session đã bị hủy');
+    } else {
+      if (!['capturing', 'recoverable'].includes(session.status)) throw new Error('Session không còn nhận ảnh');
+    }
     const ext = String(extension).toLowerCase().replace('.', '');
     if (!allowedExtensions.has(ext)) throw new Error(`Unsupported extension: ${ext}`);
     const resultProfile = kind === 'photo-strip' ? String(profile || '') : '';
@@ -343,7 +347,7 @@ export class LocalStore {
 
   async saveDraft({ sessionId, draft }) {
     const session = this.queue.sessions[sessionId];
-    if (!session || !['capturing', 'recoverable'].includes(session.status)) throw new Error('Phiên chụp không khả dụng');
+    if (!session || ['cancelled', 'failed'].includes(session.status) || isExpired(session)) throw new Error('Phiên chụp không khả dụng');
     session.draft = this.validateDraft(session, draft);
     await this.persist();
     return structuredClone(session.draft);
