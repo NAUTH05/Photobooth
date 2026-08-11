@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, safeStorage, session, shell } from 'electron';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ConfigStore } from './config.js';
@@ -206,16 +207,19 @@ function registerIpc() {
       }
     }
 
+    const tempHtmlPath = path.join(os.tmpdir(), `print_page_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.html`);
     const html = `<!doctype html><style>@page{margin:0;size:${orientation}}html,body{margin:0;width:100%;height:100%;overflow:hidden}img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transform:translate(${offsetX}mm,${offsetY}mm)}</style><img src="${dataUrl}">`;
+    await fs.writeFile(tempHtmlPath, html, 'utf8');
     const printWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
     try {
-      await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+      await printWindow.loadFile(tempHtmlPath);
       return await new Promise((resolve) => printWindow.webContents.print({
         silent: config.silent, deviceName: deviceName || undefined, printBackground: true,
         copies, pageSize: { width: config.pageWidthMicrons, height: config.pageHeightMicrons }, landscape: isLandscape
       }, (success, failureReason) => resolve({ ok: success, error: failureReason })));
     } finally {
       printWindow.destroy();
+      try { await fs.unlink(tempHtmlPath); } catch {}
     }
   });
 }
