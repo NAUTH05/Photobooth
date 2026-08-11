@@ -132,7 +132,7 @@ test('Sharp compositor writes landscape output at 3600x2400', async () => {
   }
 });
 
-test('Sharp compositor duplicates one 2x6 strip into an identical 2400x3600 sheet', async () => {
+test('Sharp compositor renders a single 1200x3600 2x6 strip for digital output', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'photobooth-strip-'));
   try {
     const frame = await createFrame(root, {
@@ -145,15 +145,11 @@ test('Sharp compositor duplicates one 2x6 strip into an identical 2400x3600 shee
     const result = await compositor.render({ sessionId: session.id, artifactIds: [item.id], frameId: 'frame' });
     const metadata = await sharp(Buffer.from(result.bytes)).metadata();
     assert.equal(result.profile, '2x6');
-    assert.equal(result.width, 2400);
+    assert.equal(result.width, 1200);
     assert.equal(result.height, 3600);
-    assert.equal(metadata.width, 2400);
+    assert.equal(metadata.width, 1200);
     assert.equal(metadata.height, 3600);
     assert.equal(metadata.density, 600);
-
-    const left = await sharp(Buffer.from(result.bytes)).extract({ left: 0, top: 0, width: 1200, height: 3600 }).raw().toBuffer();
-    const right = await sharp(Buffer.from(result.bytes)).extract({ left: 1200, top: 0, width: 1200, height: 3600 }).raw().toBuffer();
-    assert.deepEqual(left, right);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
