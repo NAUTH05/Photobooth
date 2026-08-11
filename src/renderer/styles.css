@@ -1437,6 +1437,7 @@ body.capture-active #app {
 
 /* Zoom modal */
 .zoom-modal {
+  display: none !important;
   position: fixed;
   inset: 0;
   z-index: 2000;
@@ -1450,17 +1451,17 @@ body.capture-active #app {
   border-radius: 0 !important;
   background: transparent !important;
   box-shadow: none !important;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   pointer-events: none;
   opacity: 0;
   transition: opacity .2s ease;
   overflow: hidden;
 }
 
-.zoom-modal.open, .zoom-modal[open] {
-  pointer-events: all;
+.zoom-modal.open {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto !important;
   opacity: 1;
 }
 
