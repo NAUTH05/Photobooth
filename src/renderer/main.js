@@ -1140,24 +1140,12 @@ function openZoom(src) {
   const img = $('#zoomImage');
   if (img) img.src = src;
   applyZoomTransform();
-  const dialog = $('#zoomModal');
-  if (dialog) {
-    dialog.classList.add('open');
-    if (typeof dialog.showModal === 'function' && !dialog.open) {
-      try { dialog.showModal(); } catch { }
-    }
-  }
+  $('#zoomModal')?.classList.add('open');
 }
 
 function closeZoom() {
   state.isZoomDragging = false;
-  const dialog = $('#zoomModal');
-  if (dialog) {
-    dialog.classList.remove('open');
-    if (typeof dialog.close === 'function' && dialog.open) {
-      try { dialog.close(); } catch { }
-    }
-  }
+  $('#zoomModal')?.classList.remove('open');
   setTimeout(() => {
     const img = $('#zoomImage');
     if (img) img.src = '';
