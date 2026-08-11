@@ -1161,14 +1161,22 @@ body.capture-active #app {
   width: 66px;
   height: 49px;
   object-fit: cover;
-  border-radius: 5px;
-  border: 2px solid rgba(255, 255, 255, .45);
-  box-shadow: 0 2px 8px #0008;
+  border-radius: 6px;
+  border: 2px solid rgba(255, 255, 255, .6);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
   display: block;
+  cursor: pointer;
+  transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+
+.capture-thumb:hover {
+  transform: scale(1.1);
+  border-color: #ffffff;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.6);
 }
 
 .capture-thumb:last-child {
-  border-color: white;
+  border-color: var(--accent);
 }
 
 .selection-help {

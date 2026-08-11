@@ -694,7 +694,11 @@ async function finalizePhoto() {
 function addCaptureThumbnail(dataUrl) {
   const container = $('#captureThumbnails');
   const img = document.createElement('img');
-  img.className = 'capture-thumb'; img.src = dataUrl; img.alt = '';
+  img.className = 'capture-thumb';
+  img.src = dataUrl;
+  img.alt = 'Ảnh vừa chụp';
+  img.title = 'Nhấn để xem phóng to full screen';
+  img.onclick = () => openZoom(dataUrl);
   container.append(img);
   img.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
