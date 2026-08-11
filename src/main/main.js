@@ -169,6 +169,43 @@ function registerIpc() {
       ? Math.min(10, Math.round(Number(request.copies))) : undefined;
     const copies = requestedCopies ?? config.copies ?? 1;
     const orientation = isLandscape ? 'landscape' : 'portrait';
+
+    if (process.platform === 'win32') {
+      try {
+        const appPath = app.getAppPath();
+        const scriptPath = app.isPackaged
+          ? path.join(process.resourcesPath, 'scripts', 'print_image.ps1')
+          : path.join(appPath, 'scripts', 'print_image.ps1');
+
+        const tempImgPath = path.join(os.tmpdir(), `print_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`);
+        const base64Data = dataUrl.replace(/^data:image\/[^;]+;base64,/, '');
+        await fs.writeFile(tempImgPath, Buffer.from(base64Data, 'base64'));
+
+        const { execFile } = await import('node:child_process');
+        const { promisify } = await import('node:util');
+        const execFileAsync = promisify(execFile);
+
+        const args = [
+          '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath,
+          '-printerName', deviceName || '',
+          '-imagePath', tempImgPath,
+          '-offsetXStr', String(offsetX),
+          '-offsetYStr', String(offsetY),
+          '-orientation', orientation,
+          '-enable2x6', isStrip ? 'true' : 'false',
+          '-targetDpi', String(configStore.get().composite?.density || 300)
+        ];
+
+        for (let i = 0; i < copies; i += 1) {
+          await execFileAsync('powershell.exe', args, { windowsHide: true, timeout: 30000 });
+        }
+        try { await fs.unlink(tempImgPath); } catch {}
+        return { ok: true };
+      } catch (psErr) {
+        console.warn('Smart PowerShell print failed, falling back to Chromium print:', psErr.message);
+      }
+    }
+
     const html = `<!doctype html><style>@page{margin:0;size:${orientation}}html,body{margin:0;width:100%;height:100%;overflow:hidden}img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transform:translate(${offsetX}mm,${offsetY}mm)}</style><img src="${dataUrl}">`;
     const printWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
     try {
