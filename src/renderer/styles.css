@@ -1439,34 +1439,36 @@ body.capture-active #app {
 .zoom-modal {
   position: fixed;
   inset: 0;
-  z-index: 200;
+  z-index: 2000;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: 100vw !important;
+  max-height: 100vh !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
   display: flex;
   align-items: center;
   justify-content: center;
   pointer-events: none;
   opacity: 0;
-  transition: opacity .2s;
+  transition: opacity .2s ease;
+  overflow: hidden;
 }
 
-.zoom-modal.open {
+.zoom-modal.open, .zoom-modal[open] {
   pointer-events: all;
   opacity: 1;
-}
-
-#zoomModal.zoom-modal {
-  width: auto;
-  max-height: none;
-  box-shadow: none;
-  padding: 0;
-  border-radius: 0;
-  background: transparent;
 }
 
 .zoom-backdrop {
   position: absolute;
   inset: 0;
-  background: #000000b3;
-  backdrop-filter: blur(6px);
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
   cursor: zoom-out;
 }
 
@@ -1477,33 +1479,39 @@ body.capture-active #app {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 96vw;
-  height: 96vh;
-  max-width: 96vw;
-  max-height: 96vh;
+  width: 100vw;
+  height: 100vh;
+  max-width: 100vw;
+  max-height: 100vh;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .zoom-image-wrap {
   position: relative;
-  border: 6px solid white;
-  border-radius: 10px;
-  box-shadow: 0 30px 90px #000e;
-  overflow: hidden;
-  line-height: 0;
-  max-width: 94vw;
-  max-height: 93vh;
+  width: 100%;
+  height: 100%;
+  max-width: 100vw;
+  max-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
+  pointer-events: auto;
   touch-action: none;
   user-select: none;
+  overflow: visible;
 }
 
 .zoom-image-wrap img {
   max-width: 92vw;
   max-height: 90vh;
+  width: auto;
+  height: auto;
   object-fit: contain;
   display: block;
+  border: 5px solid #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 25px 80px rgba(0, 0, 0, 0.85);
   transition: transform .12s ease-out;
   transform-origin: center center;
   user-select: none;
@@ -1518,24 +1526,42 @@ body.capture-active #app {
 }
 
 .zoom-controls {
-  position: absolute;
-  bottom: 14px;
+  position: fixed;
+  bottom: 28px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 10px;
-  z-index: 2;
-  background: rgba(0, 0, 0, .55);
+  align-items: center;
+  gap: 14px;
+  z-index: 2100;
+  background: rgba(20, 24, 25, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 99px;
-  padding: 5px 8px;
-  backdrop-filter: blur(6px);
+  padding: 8px 16px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
 }
 
 .zoom-controls .icon-button {
-  background: rgba(255, 255, 255, .9);
-  font-size: 22px;
-  font-weight: 700;
-  box-shadow: 0 4px 12px #0003;
+  background: rgba(255, 255, 255, 0.95);
+  color: #173c34;
+  border: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  font-size: 20px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  transition: transform .15s ease, background-color .15s ease;
+}
+
+.zoom-controls .icon-button:hover {
+  transform: scale(1.1);
+  background: #ffffff;
 }
 
 /* Crop Modal (Avatar Crop Dialog) */

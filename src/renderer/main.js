@@ -1138,16 +1138,29 @@ function openZoom(src) {
   state.zoomTranslateY = 0;
   state.isZoomDragging = false;
   const img = $('#zoomImage');
-  img.src = src;
+  if (img) img.src = src;
   applyZoomTransform();
-  $('#zoomModal').classList.add('open');
+  const dialog = $('#zoomModal');
+  if (dialog) {
+    dialog.classList.add('open');
+    if (typeof dialog.showModal === 'function' && !dialog.open) {
+      try { dialog.showModal(); } catch { }
+    }
+  }
 }
 
 function closeZoom() {
   state.isZoomDragging = false;
-  $('#zoomModal').classList.remove('open');
+  const dialog = $('#zoomModal');
+  if (dialog) {
+    dialog.classList.remove('open');
+    if (typeof dialog.close === 'function' && dialog.open) {
+      try { dialog.close(); } catch { }
+    }
+  }
   setTimeout(() => {
-    $('#zoomImage').src = '';
+    const img = $('#zoomImage');
+    if (img) img.src = '';
     state.zoomScale = 1;
     state.zoomTranslateX = 0;
     state.zoomTranslateY = 0;
