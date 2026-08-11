@@ -32,7 +32,7 @@ test('serves a token-protected session gallery and its image', async () => {
     await store.finishSession(session.id);
     await server.start();
     const port = server.port;
-    const token = encodeURIComponent(session.galleryToken);
+    const token = encodeURIComponent(store.queue.sessions[session.id].galleryToken);
     const gallery = await request(`http://127.0.0.1:${port}/s/${session.id}?t=${token}`);
     assert.equal(gallery.status, 200);
     assert.match(gallery.body.toString(), /Khoảnh khắc/);

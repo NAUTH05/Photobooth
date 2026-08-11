@@ -39,3 +39,12 @@ test('legacy .env values configure printer, QR, resolution and non-mirrored outp
   assert.equal(config.camera.mirrorOutput, false);
   assert.equal(config.frames.localDir, path.resolve(root, 'frames'));
 });
+
+test('embedded QR defaults are smaller while explicit overrides remain supported', () => {
+  const defaults = envConfigPatch({}, path.resolve('example-app'));
+  assert.equal(defaults.composite.qrSizeStrip, 92);
+  assert.equal(defaults.composite.qrSizeStandard, 80);
+  const overrides = envConfigPatch({ QR_SIZE_STRIP: '140', QR_SIZE_STANDARD: '120' }, path.resolve('example-app'));
+  assert.equal(overrides.composite.qrSizeStrip, 140);
+  assert.equal(overrides.composite.qrSizeStandard, 120);
+});

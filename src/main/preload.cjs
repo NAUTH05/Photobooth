@@ -9,11 +9,25 @@ contextBridge.exposeInMainWorld('photobooth', {
     create: (mode) => ipcRenderer.invoke('session:create', mode),
     save: (payload) => ipcRenderer.invoke('artifact:save', payload),
     finish: (id) => ipcRenderer.invoke('session:finish', id),
-    cancel: (id) => ipcRenderer.invoke('session:cancel', id)
+    cancel: (id) => ipcRenderer.invoke('session:cancel', id),
+    listRecoverable: () => ipcRenderer.invoke('session:list-recoverable'),
+    listResults: () => ipcRenderer.invoke('session:list-results'),
+    restoreResult: (id) => ipcRenderer.invoke('session:restore-result', id),
+    acknowledgeResult: (id) => ipcRenderer.invoke('session:acknowledge-result', id),
+    resume: (id) => ipcRenderer.invoke('session:resume', id),
+    readOriginals: (payload) => ipcRenderer.invoke('session:read-originals', payload),
+    readOriginalsAny: (payload) => ipcRenderer.invoke('session:read-originals-any', payload),
+    listAll: () => ipcRenderer.invoke('session:list-all'),
+    saveDraft: (payload) => ipcRenderer.invoke('session:save-draft', payload)
   },
   frames: {
     list: () => ipcRenderer.invoke('frames:list'),
-    sync: () => ipcRenderer.invoke('frames:sync')
+    sync: () => ipcRenderer.invoke('frames:sync'),
+    analyze: (frameId) => ipcRenderer.invoke('frames:analyze', frameId)
+  },
+  composite: {
+    preview: (payload) => ipcRenderer.invoke('composite:preview', payload),
+    create: (payload) => ipcRenderer.invoke('composite:create', payload)
   },
   drive: {
     authorize: (oauthClientFile) => ipcRenderer.invoke('drive:authorize', oauthClientFile)
@@ -33,7 +47,7 @@ contextBridge.exposeInMainWorld('photobooth', {
     health: () => ipcRenderer.invoke('native:health'),
     trigger: (sessionId) => ipcRenderer.invoke('native:trigger', sessionId)
   },
-  print: (dataUrl) => ipcRenderer.invoke('print:image', dataUrl),
+  print: (payload) => ipcRenderer.invoke('print:image', payload),
   onUploadStatus: (callback) => {
     const listener = (_event, value) => callback(value);
     ipcRenderer.on('upload:status', listener);
