@@ -430,7 +430,7 @@ async function startCamera() {
   stopCamera();
   const camera = state.config.camera;
   const video = { width: { ideal: camera.width }, height: { ideal: camera.height } };
-  if (camera.deviceId) video.deviceId = { exact: camera.deviceId }; else video.facingMode = camera.facingMode;
+  if (camera.deviceId) video.deviceId = { ideal: camera.deviceId }; else if (camera.facingMode) video.facingMode = camera.facingMode;
   if (state.config.camera.mode === 'dslr') {
     $('#cameraVideo').style.display = 'none';
     $('#cameraModeLabel').textContent = 'DSLR / CANON BRIDGE';
@@ -441,7 +441,12 @@ async function startCamera() {
     return;
   }
   $('#cameraVideo').style.display = 'block';
-  state.stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+  try {
+    state.stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+  } catch (error) {
+    console.warn('Constrained camera request failed, attempting default video stream:', error);
+    state.stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+  }
   const element = $('#cameraVideo');
   element.srcObject = state.stream;
   element.classList.toggle('mirror', camera.mirrorPreview);
@@ -1403,14 +1408,33 @@ async function openSettings() {
 }
 
 async function listCameras() {
+  const select = $('#cameraDevice');
+  if (!select) return;
   try {
-    const temporary = await navigator.mediaDevices.getUserMedia({ video: true });
-    const devices = (await navigator.mediaDevices.enumerateDevices()).filter((device) => device.kind === 'videoinput');
-    temporary.getTracks().forEach((track) => track.stop());
-    $('#cameraDevice').replaceChildren(new Option('Tự động', ''));
-    devices.forEach((device, index) => $('#cameraDevice').add(new Option(device.label || `Camera ${index + 1}`, device.deviceId)));
-    $('#cameraDevice').value = state.config.camera.deviceId || '';
-  } catch { }
+    let devices = (await navigator.mediaDevices.enumerateDevices()).filter((device) => device.kind === 'videoinput');
+    if (devices.some((d) => !d.label)) {
+      try {
+        const temporary = await navigator.mediaDevices.getUserMedia({ video: true });
+        devices = (await navigator.mediaDevices.enumerateDevices()).filter((device) => device.kind === 'videoinput');
+        temporary.getTracks().forEach((track) => track.stop());
+      } catch (err) {
+        console.warn('Temporary camera acquisition failed:', err);
+      }
+    }
+    select.replaceChildren(new Option('Tự động chọn Camera', ''));
+    if (devices.length === 0) {
+      select.add(new Option('Không tìm thấy thiết bị webcam', ''));
+    } else {
+      devices.forEach((device, index) => {
+        const label = device.label || `Webcam ${index + 1} (${device.deviceId.slice(0, 6)})`;
+        select.add(new Option(label, device.deviceId));
+      });
+    }
+    select.value = state.config.camera.deviceId || '';
+  } catch (error) {
+    console.error('Lỗi đọc danh sách camera:', error);
+    select.replaceChildren(new Option('Tự động chọn Camera', ''));
+  }
 }
 
 async function saveSettings(event) {
