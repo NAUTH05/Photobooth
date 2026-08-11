@@ -186,12 +186,17 @@ function registerIpc() {
         const { promisify } = await import('node:util');
         const execFileAsync = promisify(execFile);
 
+        const widthMm = isLandscape ? 152.4 : 101.6;
+        const heightMm = isLandscape ? 101.6 : 152.4;
+
         const args = [
           '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath,
           '-printerName', deviceName || '',
           '-imagePath', tempImgPath,
           '-offsetXStr', String(offsetX),
           '-offsetYStr', String(offsetY),
+          '-widthMmStr', String(widthMm),
+          '-heightMmStr', String(heightMm),
           '-orientation', orientation,
           '-enable2x6', isStrip ? 'true' : 'false',
           '-targetDpi', String(configStore.get().composite?.density || 300)
