@@ -832,11 +832,36 @@ async function acknowledgeCurrentResult() {
   await window.photobooth.session.acknowledgeResult(state.session.id);
 }
 
+function getDraftSelectedArtifactIds() {
+  const targetCount = state.selectionTargetCount;
+  const allShotIds = state.shots.map((s) => s.artifactId);
+  const assignedIds = (state.slotAssignments || []).filter(Boolean);
+  
+  const result = [];
+  const added = new Set();
+
+  for (const id of assignedIds) {
+    if (allShotIds.includes(id) && !added.has(id)) {
+      result.push(id);
+      added.add(id);
+    }
+  }
+
+  for (const id of allShotIds) {
+    if (result.length >= targetCount) break;
+    if (!added.has(id)) {
+      result.push(id);
+      added.add(id);
+    }
+  }
+
+  return result;
+}
+
 function draftValue(step = $('#frameScreen').classList.contains('active') ? 'frame' : 'selection') {
-  const selected = selectedArtifactIds().slice(0, state.selectionTargetCount);
   return {
     targetCount: state.selectionTargetCount,
-    selectedArtifactIds: selected,
+    selectedArtifactIds: getDraftSelectedArtifactIds(),
     frameId: state.selectedFrame?.id || '',
     slotAssignments: state.slotAssignments,
     transforms: state.photoTransforms,
