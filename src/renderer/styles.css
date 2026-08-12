@@ -494,41 +494,10 @@ button {
   font-size: 12px;
 }
 
-.frame-browser {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
+.frame-browser,
 .photo-workbench {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-}
-
-.append-photos-btn {
-  margin: 10px 12px 6px;
-  padding: 10px 14px;
-  background: var(--accent, #ef765e);
-  color: #ffffff;
-  border: 2px solid #40494a;
-  border-radius: 8px;
-  font-weight: 700;
-  font-size: 13px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.08);
-  transition: transform 0.15s ease, filter 0.15s ease;
-}
-
-.append-photos-btn:hover {
-  transform: translateY(-1px);
-  filter: brightness(1.06);
-}
-
-.append-photos-btn:active {
-  transform: translateY(0);
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .composition-workspace {

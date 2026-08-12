@@ -752,7 +752,8 @@ async function finishCapturePhase() {
   stopCamera();
   await ensureQrDataUrl();
   state.selectionTargetCount = Math.min(candidateCount(), state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4);
-  state.selectedShotIndexes = new Set(state.shots.map((_shot, index) => index));
+  const targetCount = state.selectionTargetCount;
+  state.selectedShotIndexes = new Set(state.shots.slice(0, targetCount).map((_shot, index) => index));
   state.slotAssignments ??= [];
   openFrameSelection();
   scheduleDraftSave();
@@ -803,7 +804,11 @@ function changeSelectionTarget(event) {
 }
 
 async function openFrameSelection() {
-  state.selectedShotIndexes = new Set(state.shots.map((_shot, index) => index));
+  state.selectionTargetCount = Math.min(candidateCount(), state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4);
+  const targetCount = state.selectionTargetCount;
+  if (state.selectedShotIndexes.size > targetCount || state.selectedShotIndexes.size === 0) {
+    state.selectedShotIndexes = new Set(state.shots.slice(0, targetCount).map((_shot, index) => index));
+  }
   await ensureQrDataUrl();
   $('#frameScreen .section-heading h2').textContent = `Chọn khung và sắp xếp ảnh (${state.shots.length} ảnh đã chụp)`;
   ensureAssignments();
@@ -832,9 +837,10 @@ async function acknowledgeCurrentResult() {
 }
 
 function draftValue(step = $('#frameScreen').classList.contains('active') ? 'frame' : 'selection') {
+  const selected = selectedArtifactIds().slice(0, state.selectionTargetCount);
   return {
     targetCount: state.selectionTargetCount,
-    selectedArtifactIds: selectedArtifactIds(),
+    selectedArtifactIds: selected,
     frameId: state.selectedFrame?.id || '',
     slotAssignments: state.slotAssignments,
     transforms: state.photoTransforms,
@@ -1501,9 +1507,6 @@ async function init() {
     if (state.navigatedFromSessions) openSessionsScreen();
     else appendCapture();
   };
-  if ($('#appendCaptureBtn')) {
-    $('#appendCaptureBtn').onclick = () => appendCapture();
-  }
   if ($('#retakeAll')) {
     $('#retakeAll').onclick = () => {
       if (state.navigatedFromSessions) openSessionsScreen();
