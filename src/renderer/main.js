@@ -752,8 +752,7 @@ async function finishCapturePhase() {
   stopCamera();
   await ensureQrDataUrl();
   state.selectionTargetCount = Math.min(candidateCount(), state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4);
-  const targetCount = state.selectionTargetCount;
-  state.selectedShotIndexes = new Set(state.shots.slice(0, targetCount).map((_shot, index) => index));
+  state.selectedShotIndexes = new Set(state.shots.map((_shot, index) => index));
   state.slotAssignments ??= [];
   openFrameSelection();
   scheduleDraftSave();
@@ -805,9 +804,7 @@ function changeSelectionTarget(event) {
 
 async function openFrameSelection() {
   state.selectionTargetCount = Math.min(candidateCount(), state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4);
-  const targetCount = state.selectionTargetCount;
-  const countToSelect = Math.min(targetCount, state.shots.length);
-  state.selectedShotIndexes = new Set(Array.from({ length: countToSelect }, (_val, index) => index));
+  state.selectedShotIndexes = new Set(state.shots.map((_shot, index) => index));
   await ensureQrDataUrl();
   $('#frameScreen .section-heading h2').textContent = `Chọn khung và sắp xếp ảnh (${state.shots.length} ảnh đã chụp)`;
   ensureAssignments();
