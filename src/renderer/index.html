@@ -12,6 +12,7 @@
     />
     <meta name="theme-color" content="#fff8f3" />
     <title>Roti Photobooth</title>
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div id="app">
@@ -330,12 +331,6 @@
           </div>
           <div class="field-row">
             <label
-              >Số lượng ảnh<select name="camera.candidateCount">
-                <option value="4">4 ảnh</option>
-                <option value="6">6 ảnh</option>
-                <option value="8">8 ảnh</option>
-              </select></label
-            ><label
               >Đếm ngược (giây)<input
                 name="camera.countdownSeconds"
                 type="number"
@@ -522,8 +517,10 @@
           <div class="crop-mini-preview-card">
             <small>XEM TRƯỚC KHUNG</small>
             <div class="crop-mini-preview-wrap" id="cropMiniPreviewWrap">
-              <div class="crop-mini-stage" id="cropMiniStage">
-                <img id="cropMiniPreviewImg" src="" alt="" draggable="false" />
+              <div class="crop-mini-box" id="cropMiniBox">
+                <div class="crop-mini-stage" id="cropMiniStage">
+                  <img id="cropMiniPreviewImg" src="" alt="" draggable="false" />
+                </div>
               </div>
             </div>
           </div>

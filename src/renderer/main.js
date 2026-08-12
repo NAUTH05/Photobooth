@@ -753,7 +753,7 @@ async function finishCapturePhase() {
   await ensureQrDataUrl();
   state.selectionTargetCount = Math.min(candidateCount(), state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4);
   state.selectedShotIndexes = new Set(state.shots.map((_shot, index) => index));
-  state.slotAssignments = [];
+  state.slotAssignments ??= [];
   openFrameSelection();
   scheduleDraftSave();
 }
@@ -803,6 +803,7 @@ function changeSelectionTarget(event) {
 }
 
 async function openFrameSelection() {
+  state.selectionTargetCount = Math.min(candidateCount(), state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4);
   state.selectedShotIndexes = new Set(state.shots.map((_shot, index) => index));
   await ensureQrDataUrl();
   $('#frameScreen .section-heading h2').textContent = `Chọn khung và sắp xếp ảnh (${state.shots.length} ảnh đã chụp)`;
@@ -831,10 +832,36 @@ async function acknowledgeCurrentResult() {
   await window.photobooth.session.acknowledgeResult(state.session.id);
 }
 
+function getDraftSelectedArtifactIds() {
+  const targetCount = state.selectionTargetCount;
+  const allShotIds = state.shots.map((s) => s.artifactId);
+  const assignedIds = (state.slotAssignments || []).filter(Boolean);
+  
+  const result = [];
+  const added = new Set();
+
+  for (const id of assignedIds) {
+    if (allShotIds.includes(id) && !added.has(id)) {
+      result.push(id);
+      added.add(id);
+    }
+  }
+
+  for (const id of allShotIds) {
+    if (result.length >= targetCount) break;
+    if (!added.has(id)) {
+      result.push(id);
+      added.add(id);
+    }
+  }
+
+  return result;
+}
+
 function draftValue(step = $('#frameScreen').classList.contains('active') ? 'frame' : 'selection') {
   return {
     targetCount: state.selectionTargetCount,
-    selectedArtifactIds: selectedArtifactIds(),
+    selectedArtifactIds: getDraftSelectedArtifactIds(),
     frameId: state.selectedFrame?.id || '',
     slotAssignments: state.slotAssignments,
     transforms: state.photoTransforms,
@@ -1171,8 +1198,8 @@ function closeZoom() {
 let cropState = {
   artifactId: '',
   dataUrl: '',
-  slotWidth: 1,
-  slotHeight: 1,
+  slotWidth: 1000,
+  slotHeight: 1000,
   panX: 50,
   panY: 50,
   zoom: 1,
@@ -1181,7 +1208,8 @@ let cropState = {
   dragStartX: 0,
   dragStartY: 0,
   initialPanX: 50,
-  initialPanY: 50
+  initialPanY: 50,
+  savedTransform: null
 };
 
 function openCropModal(artifactId) {
@@ -1202,6 +1230,7 @@ function openCropModal(artifactId) {
     panY: existing.panY,
     zoom: existing.zoom,
     rotation: existing.rotation,
+    savedTransform: structuredClone(existing),
     isDragging: false,
     dragStartX: 0,
     dragStartY: 0,
@@ -1222,8 +1251,12 @@ function openCropModal(artifactId) {
   }
 }
 
-function closeCropModal() {
+function closeCropModal(canceled = false) {
   cropState.isDragging = false;
+  if (canceled && cropState.artifactId && cropState.savedTransform) {
+    state.photoTransforms[cropState.artifactId] = cropState.savedTransform;
+    scheduleFramePreview(0);
+  }
   const dialog = $('#cropModal');
   if (dialog) dialog.close();
 }
@@ -1303,18 +1336,22 @@ function updateCropModalLayout() {
   }
 
   const miniWrap = $('#cropMiniPreviewWrap');
+  const miniBox = $('#cropMiniBox');
   const miniStage = $('#cropMiniStage');
   const miniImg = $('#cropMiniPreviewImg');
-  if (miniWrap && miniStage && miniImg) {
+  if (miniWrap && miniBox && miniStage && miniImg) {
     miniImg.src = cropState.dataUrl;
-    const miniWrapW = miniWrap.clientWidth || 140;
-    const miniWrapH = miniWrap.clientHeight || 140;
+    const miniWrapW = miniWrap.clientWidth || 240;
+    const miniWrapH = miniWrap.clientHeight || 150;
     let miniBoxW, miniBoxH;
     if (miniWrapW / miniWrapH > slotAspect) {
-      miniBoxH = miniWrapH; miniBoxW = miniBoxH * slotAspect;
+      miniBoxH = miniWrapH - 12; miniBoxW = miniBoxH * slotAspect;
     } else {
-      miniBoxW = miniWrapW; miniBoxH = miniBoxW / slotAspect;
+      miniBoxW = miniWrapW - 12; miniBoxH = miniBoxW / slotAspect;
     }
+    miniBox.style.width = `${Math.round(miniBoxW)}px`;
+    miniBox.style.height = `${Math.round(miniBoxH)}px`;
+
     const scaleMini = miniBoxW / cropW;
     miniStage.style.width = `${Math.round(SW * scaleMini)}px`;
     miniStage.style.height = `${Math.round(SH * scaleMini)}px`;
@@ -1330,6 +1367,16 @@ function updateCropModalLayout() {
     } else {
       miniImg.style.transform = 'none';
     }
+  }
+
+  if (cropState.artifactId) {
+    state.photoTransforms[cropState.artifactId] = {
+      panX: cropState.panX,
+      panY: cropState.panY,
+      zoom: cropState.zoom,
+      rotation: cropState.rotation
+    };
+    scheduleFramePreview(50);
   }
 }
 
@@ -1360,18 +1407,43 @@ async function openCapture() {
   if (previousSession && !previousFinished) await window.photobooth.session.cancel(previousSession.id).catch(() => { });
   state.session = null; state.sessionFinished = false; revokeRecoveryUrls(); state.shots = [];
   state.photoTransforms = {}; state.activeTransformId = ''; state.selectedShotIndexes = new Set(); state.selectionTargetCount = candidateCount(); state.slotAssignments = []; state.activeSlotIndex = -1; state.pendingArtifactId = ''; state.galleryUrl = ''; state.qrDataUrl = ''; state.timelapseSavePromise = null;
-  const count = candidateCount();
+  
+  await appendCapture();
+}
+
+async function appendCapture() {
+  state.captureGeneration += 1;
+  clearTimeout(state.draftTimer);
   showScreen('captureScreen');
   updateTimelapseStatus('hidden');
+  
   $('#captureThumbnails').replaceChildren();
-  $('#captureNextButton').hidden = true;
-  $('#shutterButton').disabled = false;
-  $('#captureMessage').textContent = state.config.camera.captureWorkflow === 'manual' ? 'Nhấn nút để chụp ảnh 1' : 'Nhấn nút để bắt đầu chụp tự động';
-  $('#shotProgress').innerHTML = Array.from({ length: count }, () => '<i></i>').join('');
+  state.shots.forEach((shot) => addCaptureThumbnail(shot.dataUrl));
+  
+  $('#captureNextButton').hidden = state.shots.length === 0;
+  $('#shutterButton').disabled = state.shots.length >= MAX_SHOTS;
+  
+  const count = candidateCount();
+  if (state.shots.length === 0) {
+    $('#captureMessage').textContent = state.config.camera.captureWorkflow === 'manual' ? 'Nhấn nút để chụp ảnh 1' : 'Nhấn nút để bắt đầu chụp tự động';
+  } else if (state.shots.length >= MAX_SHOTS) {
+    $('#captureMessage').textContent = `Đã chụp đủ ${MAX_SHOTS} ảnh · nhấn "Tiếp theo" để xếp khung`;
+  } else {
+    $('#captureMessage').textContent = `Đã chụp ${state.shots.length} ảnh · nhấn nút để chụp ảnh ${state.shots.length + 1} hoặc nhấn "Tiếp theo"`;
+  }
+
+  const dotsCount = Math.max(count, state.shots.length);
+  $('#shotProgress').innerHTML = Array.from({ length: dotsCount }, (_value, index) => 
+    `<i class="${index < state.shots.length ? 'done' : ''}"></i>`
+  ).join('');
+  
   $('#liveFrame').removeAttribute('src'); $('#liveFrame').style.display = 'none';
+
   try {
     await startCamera();
-    state.session = await window.photobooth.session.create('photo');
+    if (!state.session) {
+      state.session = await window.photobooth.session.create('photo');
+    }
     startTimelapseRecording();
   } catch (error) {
     stopCamera();
@@ -1474,13 +1546,19 @@ async function init() {
   $('#captureNextButton').onclick = () => { if (!state.busy) finishCapturePhase().catch((error) => toast(error.message)); };
   $('#backToSelection').onclick = () => {
     if (state.navigatedFromSessions) openSessionsScreen();
-    else openCapture();
+    else appendCapture();
   };
-  $('#retakeAll').onclick = () => {
-    if (state.navigatedFromSessions) openSessionsScreen();
-    else openCapture();
+  if ($('#retakeAll')) {
+    $('#retakeAll').onclick = () => {
+      if (state.navigatedFromSessions) openSessionsScreen();
+      else openCapture();
+    };
+  }
+  $('#shutterButton').onclick = beginCapture;
+  $('#cancelCapture').onclick = () => {
+    if (state.shots.length > 0) openFrameSelection();
+    else goHome();
   };
-  $('#shutterButton').onclick = beginCapture; $('#cancelCapture').onclick = goHome;
   $('#brandHome').onclick = goHome; $('#settingsButton').onclick = openSettings; $('#settingsForm').onsubmit = saveSettings;
   $('#settingsClose').onclick = () => $('#settingsDialog').close();
   $('#settingsCancel').onclick = () => $('#settingsDialog').close();
