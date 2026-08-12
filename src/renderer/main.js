@@ -806,9 +806,8 @@ function changeSelectionTarget(event) {
 async function openFrameSelection() {
   state.selectionTargetCount = Math.min(candidateCount(), state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4);
   const targetCount = state.selectionTargetCount;
-  if (state.selectedShotIndexes.size > targetCount || state.selectedShotIndexes.size === 0) {
-    state.selectedShotIndexes = new Set(state.shots.slice(0, targetCount).map((_shot, index) => index));
-  }
+  const countToSelect = Math.min(targetCount, state.shots.length);
+  state.selectedShotIndexes = new Set(Array.from({ length: countToSelect }, (_val, index) => index));
   await ensureQrDataUrl();
   $('#frameScreen .section-heading h2').textContent = `Chọn khung và sắp xếp ảnh (${state.shots.length} ảnh đã chụp)`;
   ensureAssignments();
@@ -1149,19 +1148,6 @@ function applyZoomTransform() {
   if (!state.isZoomDragging) {
     img.style.cursor = state.zoomScale > 1 ? 'grab' : 'zoom-in';
   }
-}
-
-async function openFrameSelection() {
-  state.selectionTargetCount = Math.min(candidateCount(), state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4);
-  const targetCount = state.selectionTargetCount;
-  const countToSelect = Math.min(targetCount, state.shots.length);
-  state.selectedShotIndexes = new Set(Array.from({ length: countToSelect }, (_val, index) => index));
-  await ensureQrDataUrl();
-  $('#frameScreen .section-heading h2').textContent = `Chọn khung và sắp xếp ảnh (${state.shots.length} ảnh đã chụp)`;
-  ensureAssignments();
-  showScreen('frameScreen');
-  renderFrames();
-  scheduleDraftSave('frame');
 }
 
 function openZoom(src) {
