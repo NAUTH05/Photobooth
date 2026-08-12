@@ -1151,6 +1151,19 @@ function applyZoomTransform() {
   }
 }
 
+async function openFrameSelection() {
+  state.selectionTargetCount = Math.min(candidateCount(), state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4);
+  const targetCount = state.selectionTargetCount;
+  const countToSelect = Math.min(targetCount, state.shots.length);
+  state.selectedShotIndexes = new Set(Array.from({ length: countToSelect }, (_val, index) => index));
+  await ensureQrDataUrl();
+  $('#frameScreen .section-heading h2').textContent = `Chọn khung và sắp xếp ảnh (${state.shots.length} ảnh đã chụp)`;
+  ensureAssignments();
+  showScreen('frameScreen');
+  renderFrames();
+  scheduleDraftSave('frame');
+}
+
 function openZoom(src) {
   state.zoomScale = 1;
   state.zoomTranslateX = 0;
@@ -1177,8 +1190,8 @@ function closeZoom() {
 let cropState = {
   artifactId: '',
   dataUrl: '',
-  slotWidth: 1,
-  slotHeight: 1,
+  slotWidth: 1000,
+  slotHeight: 1000,
   panX: 50,
   panY: 50,
   zoom: 1,
@@ -1187,7 +1200,8 @@ let cropState = {
   dragStartX: 0,
   dragStartY: 0,
   initialPanX: 50,
-  initialPanY: 50
+  initialPanY: 50,
+  savedTransform: null
 };
 
 function openCropModal(artifactId) {
@@ -1208,6 +1222,7 @@ function openCropModal(artifactId) {
     panY: existing.panY,
     zoom: existing.zoom,
     rotation: existing.rotation,
+    savedTransform: structuredClone(existing),
     isDragging: false,
     dragStartX: 0,
     dragStartY: 0,
@@ -1228,8 +1243,12 @@ function openCropModal(artifactId) {
   }
 }
 
-function closeCropModal() {
+function closeCropModal(canceled = false) {
   cropState.isDragging = false;
+  if (canceled && cropState.artifactId && cropState.savedTransform) {
+    state.photoTransforms[cropState.artifactId] = cropState.savedTransform;
+    scheduleFramePreview(0);
+  }
   const dialog = $('#cropModal');
   if (dialog) dialog.close();
 }
@@ -1309,18 +1328,22 @@ function updateCropModalLayout() {
   }
 
   const miniWrap = $('#cropMiniPreviewWrap');
+  const miniBox = $('#cropMiniBox');
   const miniStage = $('#cropMiniStage');
   const miniImg = $('#cropMiniPreviewImg');
-  if (miniWrap && miniStage && miniImg) {
+  if (miniWrap && miniBox && miniStage && miniImg) {
     miniImg.src = cropState.dataUrl;
-    const miniWrapW = miniWrap.clientWidth || 140;
-    const miniWrapH = miniWrap.clientHeight || 140;
+    const miniWrapW = miniWrap.clientWidth || 240;
+    const miniWrapH = miniWrap.clientHeight || 150;
     let miniBoxW, miniBoxH;
     if (miniWrapW / miniWrapH > slotAspect) {
-      miniBoxH = miniWrapH; miniBoxW = miniBoxH * slotAspect;
+      miniBoxH = miniWrapH - 12; miniBoxW = miniBoxH * slotAspect;
     } else {
-      miniBoxW = miniWrapW; miniBoxH = miniBoxW / slotAspect;
+      miniBoxW = miniWrapW - 12; miniBoxH = miniBoxW / slotAspect;
     }
+    miniBox.style.width = `${Math.round(miniBoxW)}px`;
+    miniBox.style.height = `${Math.round(miniBoxH)}px`;
+
     const scaleMini = miniBoxW / cropW;
     miniStage.style.width = `${Math.round(SW * scaleMini)}px`;
     miniStage.style.height = `${Math.round(SH * scaleMini)}px`;
@@ -1336,6 +1359,16 @@ function updateCropModalLayout() {
     } else {
       miniImg.style.transform = 'none';
     }
+  }
+
+  if (cropState.artifactId) {
+    state.photoTransforms[cropState.artifactId] = {
+      panX: cropState.panX,
+      panY: cropState.panY,
+      zoom: cropState.zoom,
+      rotation: cropState.rotation
+    };
+    scheduleFramePreview(50);
   }
 }
 
