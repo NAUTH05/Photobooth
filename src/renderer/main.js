@@ -753,7 +753,7 @@ async function finishCapturePhase() {
   await ensureQrDataUrl();
   state.selectionTargetCount = Math.min(candidateCount(), state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4);
   state.selectedShotIndexes = new Set(state.shots.map((_shot, index) => index));
-  state.slotAssignments = [];
+  state.slotAssignments ??= [];
   openFrameSelection();
   scheduleDraftSave();
 }
@@ -1360,18 +1360,43 @@ async function openCapture() {
   if (previousSession && !previousFinished) await window.photobooth.session.cancel(previousSession.id).catch(() => { });
   state.session = null; state.sessionFinished = false; revokeRecoveryUrls(); state.shots = [];
   state.photoTransforms = {}; state.activeTransformId = ''; state.selectedShotIndexes = new Set(); state.selectionTargetCount = candidateCount(); state.slotAssignments = []; state.activeSlotIndex = -1; state.pendingArtifactId = ''; state.galleryUrl = ''; state.qrDataUrl = ''; state.timelapseSavePromise = null;
-  const count = candidateCount();
+  
+  await appendCapture();
+}
+
+async function appendCapture() {
+  state.captureGeneration += 1;
+  clearTimeout(state.draftTimer);
   showScreen('captureScreen');
   updateTimelapseStatus('hidden');
+  
   $('#captureThumbnails').replaceChildren();
-  $('#captureNextButton').hidden = true;
-  $('#shutterButton').disabled = false;
-  $('#captureMessage').textContent = state.config.camera.captureWorkflow === 'manual' ? 'Nhấn nút để chụp ảnh 1' : 'Nhấn nút để bắt đầu chụp tự động';
-  $('#shotProgress').innerHTML = Array.from({ length: count }, () => '<i></i>').join('');
+  state.shots.forEach((shot) => addCaptureThumbnail(shot.dataUrl));
+  
+  $('#captureNextButton').hidden = state.shots.length === 0;
+  $('#shutterButton').disabled = state.shots.length >= MAX_SHOTS;
+  
+  const count = candidateCount();
+  if (state.shots.length === 0) {
+    $('#captureMessage').textContent = state.config.camera.captureWorkflow === 'manual' ? 'Nhấn nút để chụp ảnh 1' : 'Nhấn nút để bắt đầu chụp tự động';
+  } else if (state.shots.length >= MAX_SHOTS) {
+    $('#captureMessage').textContent = `Đã chụp đủ ${MAX_SHOTS} ảnh · nhấn "Tiếp theo" để xếp khung`;
+  } else {
+    $('#captureMessage').textContent = `Đã chụp ${state.shots.length} ảnh · nhấn nút để chụp ảnh ${state.shots.length + 1} hoặc nhấn "Tiếp theo"`;
+  }
+
+  const dotsCount = Math.max(count, state.shots.length);
+  $('#shotProgress').innerHTML = Array.from({ length: dotsCount }, (_value, index) => 
+    `<i class="${index < state.shots.length ? 'done' : ''}"></i>`
+  ).join('');
+  
   $('#liveFrame').removeAttribute('src'); $('#liveFrame').style.display = 'none';
+
   try {
     await startCamera();
-    state.session = await window.photobooth.session.create('photo');
+    if (!state.session) {
+      state.session = await window.photobooth.session.create('photo');
+    }
     startTimelapseRecording();
   } catch (error) {
     stopCamera();
@@ -1474,13 +1499,22 @@ async function init() {
   $('#captureNextButton').onclick = () => { if (!state.busy) finishCapturePhase().catch((error) => toast(error.message)); };
   $('#backToSelection').onclick = () => {
     if (state.navigatedFromSessions) openSessionsScreen();
-    else openCapture();
+    else appendCapture();
   };
-  $('#retakeAll').onclick = () => {
-    if (state.navigatedFromSessions) openSessionsScreen();
-    else openCapture();
+  if ($('#appendCaptureBtn')) {
+    $('#appendCaptureBtn').onclick = () => appendCapture();
+  }
+  if ($('#retakeAll')) {
+    $('#retakeAll').onclick = () => {
+      if (state.navigatedFromSessions) openSessionsScreen();
+      else openCapture();
+    };
+  }
+  $('#shutterButton').onclick = beginCapture;
+  $('#cancelCapture').onclick = () => {
+    if (state.shots.length > 0) openFrameSelection();
+    else goHome();
   };
-  $('#shutterButton').onclick = beginCapture; $('#cancelCapture').onclick = goHome;
   $('#brandHome').onclick = goHome; $('#settingsButton').onclick = openSettings; $('#settingsForm').onsubmit = saveSettings;
   $('#settingsClose').onclick = () => $('#settingsDialog').close();
   $('#settingsCancel').onclick = () => $('#settingsDialog').close();
