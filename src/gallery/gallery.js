@@ -37,25 +37,37 @@ function openLightbox(index) {
 
 function render(session) {
   document.querySelector('#sessionDate').textContent = formatDate(session.createdAt, { dateStyle: 'full', timeStyle: 'short' });
-  document.querySelector('#expiryDate').textContent = `Link còn hiệu lực đến ${formatDate(session.expiresAt, { dateStyle: 'medium' })}`;
+  document.querySelector('#expiryDate').textContent = `Album mở đến ${formatDate(session.expiresAt, { dateStyle: 'medium' })} nè~`;
   items = session.items;
   if (!items.length) {
-    grid.innerHTML = '<div class="empty-card"><h3>Ảnh đang được hoàn thiện</h3><p>Hãy tải lại trang sau ít phút nhé.</p></div>';
+    grid.innerHTML = '<div class="empty-card"><h3>Ảnh đang trên đường đến nè~</h3><p>Chạm đang gói ghém album cho bạn, ghé lại sau một chút nhé.</p></div>';
     return;
   }
   grid.replaceChildren();
   items.forEach((item, index) => {
     const article = document.createElement('article');
     article.className = 'photo-card';
+
     const button = document.createElement('button');
     button.className = 'photo-button';
     button.type = 'button';
-    button.setAttribute('aria-label', `Xem ${item.label}`);
+
     const isVideo = item.mediaType === 'video' || item.kind?.startsWith('video');
+    const displayLabel = isVideo
+      ? 'Video hậu trường'
+      : item.kind === 'photo-strip' ? 'Ảnh thành phẩm' : item.kind === 'photo-processed' ? 'Ảnh đã chỉnh màu' : 'Ảnh gốc';
+
+    button.setAttribute('aria-label', `Xem ${displayLabel}`);
     button.classList.toggle('video', isVideo);
+
+    // Badge label on top-left of card
+    const badge = document.createElement('span');
+    badge.className = 'photo-badge';
+    badge.textContent = displayLabel;
+
     const media = document.createElement(isVideo ? 'video' : 'img');
     media.src = withToken(item.mediaUrl);
-    media.setAttribute('aria-label', item.label);
+    media.setAttribute('aria-label', displayLabel);
     if (isVideo) {
       media.muted = true;
       media.loop = true;
@@ -63,20 +75,20 @@ function render(session) {
       media.playsInline = true;
       media.preload = 'metadata';
     } else {
-      media.alt = item.label;
+      media.alt = displayLabel;
       media.loading = index < 2 ? 'eager' : 'lazy';
     }
+
     button.append(media);
     button.addEventListener('click', () => openLightbox(index));
-    const caption = document.createElement('div');
-    caption.className = 'photo-caption';
-    const label = document.createElement('span');
-    label.textContent = item.label;
-    const download = document.createElement('a');
-    download.href = withToken(item.downloadUrl);
-    download.textContent = 'TẢI BẢN GỐC ↓';
-    caption.append(label, download);
-    article.append(button, caption);
+
+    // Download overlay link on bottom-right of card
+    const downloadLink = document.createElement('a');
+    downloadLink.className = 'photo-download-overlay';
+    downloadLink.href = withToken(item.downloadUrl);
+    downloadLink.textContent = isVideo ? 'TẢI VIDEO ↓' : 'TẢI VỀ ↓';
+
+    article.append(badge, button, downloadLink);
     grid.append(article);
   });
 }
@@ -84,10 +96,10 @@ function render(session) {
 async function load() {
   try {
     const response = await fetch(`/api/public/sessions/${encodeURIComponent(sessionId)}?t=${encodeURIComponent(token)}`, { cache: 'no-store' });
-    if (!response.ok) throw new Error(response.status === 410 ? 'Bộ ảnh đã hết hạn.' : 'Không thể mở bộ ảnh này.');
+    if (!response.ok) throw new Error(response.status === 410 ? 'Album này đã đóng rồi nè.' : 'Chưa mở được album lúc này.');
     render(await response.json());
   } catch (error) {
-    grid.innerHTML = `<div class="error-card"><h3>Chưa mở được gallery</h3><p>${error.message}</p></div>`;
+    grid.innerHTML = `<div class="error-card"><h3>Oops, chưa mở được album</h3><p>${error.message}</p></div>`;
   }
 }
 

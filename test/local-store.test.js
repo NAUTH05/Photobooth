@@ -72,10 +72,22 @@ test('resumes, reads originals and validates composition drafts', async (t) => {
     selectedArtifactIds: items.map((item) => item.id),
     slotAssignments: items.map((item) => item.id),
     frameId: 'frame-4',
-    transforms: { [items[0].id]: { panX: 200, panY: -1, zoom: 10, rotation: -90 } },
+    lutId: 'cinematic',
+    transforms: { [items[0].id]: { panX: 200, panY: -1, zoom: 10, rotation: -90, mirrored: true } },
     step: 'frame'
   } });
-  assert.deepEqual(draft.transforms[items[0].id], { panX: 100, panY: 0, zoom: 4, rotation: 270 });
+  assert.equal(draft.lutId, 'cinematic');
+  assert.deepEqual(draft.transforms[items[0].id], { panX: 100, panY: 0, zoom: 4, rotation: 270, mirrored: true });
+  const normalizedDraft = await store.saveDraft({ sessionId: session.id, draft: {
+    ...draft,
+    lutId: 'unknown-lut'
+  } });
+  assert.equal(normalizedDraft.lutId, 'natural');
+  const customDraft = await store.saveDraft({ sessionId: session.id, draft: {
+    ...draft,
+    lutId: 'cube-0123456789abcdefabcd'
+  } });
+  assert.equal(customDraft.lutId, 'cube-0123456789abcdefabcd');
   await assert.rejects(store.saveDraft({ sessionId: session.id, draft: { targetCount: 5 } }), /Số lượng ảnh/);
 });
 
@@ -92,4 +104,58 @@ test('resolves originals, rejects disguised images and cleans verified uploads',
     value.items[0].status = 'uploaded'; value.items[0].checksumVerified = true;
   });
   assert.equal(await store.cleanup(0), 1);
+});
+
+test('keeps local artifacts until an enabled Cloudflare upload is complete', async (t) => {
+  const { root, store } = await temporaryStore('photobooth-multi-upload-');
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const session = await store.createSession('photo');
+  const item = await store.saveArtifact({ sessionId: session.id, kind: 'photo-original', extension: 'jpg', bytes: jpeg });
+  await store.mutate(session.id, (value) => {
+    value.status = 'uploaded';
+    value.uploadedAt = new Date(Date.now() - 5000).toISOString();
+    value.cloudflareStatus = 'uploading';
+    value.items[0].status = 'uploaded';
+    value.items[0].checksumVerified = true;
+  });
+
+  assert.equal(await store.cleanup(0, { requireCloudflare: true }), 0);
+  assert.equal((await fs.stat(store.queue.sessions[session.id].items[0].path)).isFile(), true);
+
+  await store.mutate(session.id, (value) => { value.cloudflareStatus = 'uploaded'; });
+  assert.equal(await store.cleanup(0, { requireCloudflare: true }), 1);
+  await assert.rejects(fs.stat(store.queue.sessions[session.id].items.find((candidate) => candidate.id === item.id).path), { code: 'ENOENT' });
+});
+
+test('persists workflow events, print history and never-delete retention', async (t) => {
+  const { root, store } = await temporaryStore('photobooth-history-');
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const session = await store.createSession('photo');
+  const item = await store.saveArtifact({ sessionId: session.id, kind: 'photo-original', extension: 'jpg', bytes: jpeg });
+  const queued = await store.recordPrintJob(session.id, { profile: '4x6-portrait', copies: 2, status: 'queued' });
+  await store.recordPrintJob(session.id, { ...queued, status: 'printed' });
+  await store.mutate(session.id, (value) => {
+    value.status = 'uploaded';
+    value.uploadedAt = new Date(0).toISOString();
+    value.items[0].status = 'uploaded';
+    value.items[0].checksumVerified = true;
+  });
+  assert.equal(await store.cleanup(-1), 0);
+  assert.equal((await fs.stat(store.queue.sessions[session.id].items.find((candidate) => candidate.id === item.id).path)).isFile(), true);
+  assert.equal(store.queue.sessions[session.id].printJobs[0].status, 'printed');
+  assert.ok(store.queue.sessions[session.id].events.some((event) => event.type === 'print-printed'));
+});
+
+test('cleanupByAge removes local files older than the specified number of days', async (t) => {
+  const { root, store } = await temporaryStore('photobooth-age-cleanup-');
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const oldSession = await store.createSession('photo');
+  const oldItem = await store.saveArtifact({ sessionId: oldSession.id, kind: 'photo-original', extension: 'jpg', bytes: jpeg });
+  await store.mutate(oldSession.id, (value) => { value.createdAt = new Date(Date.now() - 8 * 86400000).toISOString(); value.status = 'cancelled'; });
+  const freshSession = await store.createSession('photo');
+  await store.saveArtifact({ sessionId: freshSession.id, kind: 'photo-original', extension: 'jpg', bytes: jpeg });
+  assert.equal(await store.cleanupByAge(7), 1);
+  await assert.rejects(fs.stat(store.queue.sessions[oldSession.id].items.find((candidate) => candidate.id === oldItem.id).path), { code: 'ENOENT' });
+  assert.equal(await store.cleanupByAge(7), 0);
+  assert.equal(await store.cleanupByAge(-1), 0);
 });

@@ -9,9 +9,21 @@ if (-not $resolvedBuildRoot.StartsWith("$resolvedNativeRoot\", [System.StringCom
   throw 'Native build path nằm ngoài thư mục native.'
 }
 
-$compilers = @(where.exe g++ 2>$null) | Where-Object { Test-Path -LiteralPath $_ }
+$compilers = @()
+try {
+  $compilers += @(where.exe g++ 2>$null) | Where-Object { Test-Path -LiteralPath $_ }
+} catch {
+  # `where.exe` returns exit code 1 when g++ is not in PATH. Continue with
+  # well-known MSYS2 locations so a normal Windows terminal still works.
+}
+$msysCompilers = @(
+  'C:\msys64\ucrt64\bin\g++.exe',
+  'C:\msys64\mingw64\bin\g++.exe',
+  'C:\msys64\clang64\bin\g++.exe'
+) | Where-Object { Test-Path -LiteralPath $_ }
+$compilers = @($compilers + $msysCompilers | Select-Object -Unique)
 if (-not $compilers) {
-  throw 'Không tìm thấy C++ compiler (g++).'
+  throw 'Không tìm thấy C++ compiler (g++). Cài MSYS2 UCRT64 hoặc thêm thư mục chứa g++.exe vào PATH.'
 }
 
 $selected = $compilers |
@@ -30,9 +42,34 @@ if ($selected.Version.Major -lt 10) {
   throw "C++ compiler quá cũ: $($selected.Version). Cần GCC 10 trở lên."
 }
 
-$ninja = Get-Command ninja -ErrorAction SilentlyContinue
-$generator = if ($ninja) { 'Ninja' } else { 'MinGW Makefiles' }
+$cmakeCommand = Get-Command cmake -ErrorAction SilentlyContinue
+$cmakePath = if ($cmakeCommand) { $cmakeCommand.Source } else { $null }
+if (-not $cmakePath) {
+  $cmakeFallback = @(
+    'C:\Program Files\CMake\bin\cmake.exe',
+    'C:\msys64\ucrt64\bin\cmake.exe',
+    'C:\msys64\mingw64\bin\cmake.exe'
+  ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+  if ($cmakeFallback) { $cmakePath = $cmakeFallback }
+}
+if (-not $cmakePath) {
+  throw 'Không tìm thấy CMake. Cài CMake hoặc MSYS2 UCRT64 CMake.'
+}
+$ninjaCommand = Get-Command ninja -ErrorAction SilentlyContinue
+$ninjaPath = if ($ninjaCommand) { $ninjaCommand.Source } else { $null }
+if (-not $ninjaPath) {
+  $ninjaFallback = @(
+    'C:\msys64\ucrt64\bin\ninja.exe',
+    'C:\msys64\mingw64\bin\ninja.exe',
+    'C:\Program Files\CMake\bin\ninja.exe'
+  ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+  if ($ninjaFallback) { $ninjaPath = $ninjaFallback }
+}
+$generator = if ($ninjaPath) { 'Ninja' } else { 'MinGW Makefiles' }
 $compilerDirectory = Split-Path -Parent $selected.Path
+# MSYS2's compiler driver needs its own bin directory to locate cc1plus and
+# runtime tools. Keep this change scoped to this build process only.
+$env:Path = "$compilerDirectory;$env:Path"
 $resourceCompiler = Join-Path $compilerDirectory 'windres.exe'
 $cmakeCompiler = $selected.Path.Replace('\', '/')
 $cmakeResourceCompiler = $resourceCompiler.Replace('\', '/')
@@ -46,6 +83,9 @@ $configure = @(
 )
 if (Test-Path -LiteralPath $resourceCompiler) {
   $configure += "-DCMAKE_RC_COMPILER=$cmakeResourceCompiler"
+}
+if ($ninjaPath) {
+  $configure += "-DCMAKE_MAKE_PROGRAM=$($ninjaPath.Replace('\', '/'))"
 }
 
 Write-Host "[Native] GCC $($selected.Version) · $generator" -ForegroundColor Cyan
@@ -63,7 +103,7 @@ if (Test-Path -LiteralPath $resolvedBuildRoot) {
 if ($needsClean) {
   Remove-Item -LiteralPath $resolvedBuildRoot -Recurse -Force
 }
-& cmake @configure
+& $cmakePath @configure
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& cmake --build $buildRoot --config Release
+& $cmakePath --build $buildRoot --config Release
 exit $LASTEXITCODE

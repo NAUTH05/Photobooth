@@ -15,10 +15,9 @@ const defaultManifest = {
 };
 
 export class FrameManager {
-  constructor(cacheRoot, driveFactory, configStore, bundledRoot = null) {
+  constructor(cacheRoot, configStore, bundledRoot = null) {
     this.cacheRoot = cacheRoot;
     this.bundledRoot = bundledRoot;
-    this.driveFactory = driveFactory;
     this.configStore = configStore;
     this.manifestPath = path.join(cacheRoot, 'manifest.json');
     this.lastSync = null;
@@ -44,7 +43,16 @@ export class FrameManager {
     let manifest;
     try { manifest = JSON.parse(await fs.readFile(this.manifestPath, 'utf8')); } catch { manifest = defaultManifest; }
     const bundledFrames = await this.listBundledFrames();
-    return { version: manifest.version ?? 1, frames: bundledFrames.length ? bundledFrames : (manifest.frames ?? []) };
+    const remoteFrames = Array.isArray(manifest.frames)
+      ? manifest.frames.filter((frame) => frame?.file).map((frame) => ({ ...frame, source: frame.source || 'remote' }))
+      : [];
+    const hasRemoteManifest = manifest?.schemaVersion === 1 && Array.isArray(manifest.frames);
+    return {
+      version: manifest.version ?? 1,
+      frames: hasRemoteManifest
+        ? remoteFrames
+        : (bundledFrames.length ? bundledFrames : (manifest.frames ?? []))
+    };
   }
 
   async list() {
@@ -168,23 +176,6 @@ export class FrameManager {
   }
 
   async sync() {
-    const config = this.configStore.get();
-    if (!config.drive.enabled || !config.drive.framesFolderId) return this.list();
-    const client = this.driveFactory(config);
-    const files = await client.listFrameFiles(config.drive.framesFolderId);
-    for (const file of files) {
-      const extension = path.extname(file.name).toLowerCase();
-      if (file.name !== 'manifest.json' && !imageExtensions.has(extension)) continue;
-      await client.download(file.id, path.join(this.cacheRoot, path.basename(file.name)));
-    }
-    const hasManifest = files.some((file) => file.name === 'manifest.json');
-    if (!hasManifest) {
-      const frames = files.filter((file) => imageExtensions.has(path.extname(file.name).toLowerCase())).map((file) => ({
-        id: file.id, name: path.parse(file.name).name, file: file.name, accent: '#ff5d8f', slotCount: 4, inferSlots: path.extname(file.name).toLowerCase() === '.png', fit: 'cover'
-      }));
-      await fs.writeFile(this.manifestPath, JSON.stringify({ version: Date.now(), frames }, null, 2), 'utf8');
-    }
-    this.lastSync = new Date().toISOString();
     return this.list();
   }
 }

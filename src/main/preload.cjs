@@ -25,12 +25,23 @@ contextBridge.exposeInMainWorld('photobooth', {
     sync: () => ipcRenderer.invoke('frames:sync'),
     analyze: (frameId) => ipcRenderer.invoke('frames:analyze', frameId)
   },
+  luts: {
+    list: () => ipcRenderer.invoke('luts:list'),
+    importCube: () => ipcRenderer.invoke('luts:import'),
+    renderArtifact: (payload) => ipcRenderer.invoke('luts:render-artifact', payload),
+    prepareSession: (payload) => ipcRenderer.invoke('luts:prepare-session', payload)
+  },
+  assets: {
+    status: () => ipcRenderer.invoke('assets:status'),
+    onSynced: (callback) => {
+      const listener = (_event, value) => callback(value);
+      ipcRenderer.on('assets:synced', listener);
+      return () => ipcRenderer.removeListener('assets:synced', listener);
+    }
+  },
   composite: {
     preview: (payload) => ipcRenderer.invoke('composite:preview', payload),
     create: (payload) => ipcRenderer.invoke('composite:create', payload)
-  },
-  drive: {
-    authorize: (oauthClientFile) => ipcRenderer.invoke('drive:authorize', oauthClientFile)
   },
   gallery: {
     url: (sessionId) => ipcRenderer.invoke('gallery:url', sessionId),
@@ -45,7 +56,7 @@ contextBridge.exposeInMainWorld('photobooth', {
   },
   native: {
     health: () => ipcRenderer.invoke('native:health'),
-    trigger: (sessionId) => ipcRenderer.invoke('native:trigger', sessionId)
+    trigger: (sessionId) => ipcRenderer.invoke('native:trigger', { sessionId })
   },
   print: (payload) => ipcRenderer.invoke('print:image', payload),
   onUploadStatus: (callback) => {

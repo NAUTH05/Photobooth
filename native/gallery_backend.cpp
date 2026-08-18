@@ -206,16 +206,11 @@ std::string safe_filename(std::string value) {
   return value.empty() ? "media.jpg" : value;
 }
 
-bool safe_drive_id(const std::string& value) {
-  if (value.empty() || value.size() > 200) return false;
-  return std::all_of(value.begin(), value.end(), [](unsigned char character) {
-    return std::isalnum(character) || character == '-' || character == '_';
-  });
-}
-
 bool gallery_item(const json& item) {
   if (!item.is_object() || !item.contains("kind") || !item["kind"].is_string()) return false;
+  if (item.contains("deletedAt") || item.value("galleryHidden", false)) return false;
   const auto kind = item["kind"].get<std::string>();
+  if (kind == "photo-thumbnail") return false;
   return kind.find("photo") == 0 || kind.find("dslr") == 0 || kind.find("video") == 0;
 }
 
@@ -240,7 +235,7 @@ json public_session(const json& session) {
       {"filename", filename},
       {"size", item.value("size", 0)},
       {"createdAt", item.value("createdAt", "")},
-      {"label", video ? "Video timelapse 2×" : (kind == "photo-strip" ? "Ảnh ghép 4×6" : "Ảnh gốc")},
+      {"label", video ? "Thước phim hậu trường" : (kind == "photo-strip" ? "Tấm ảnh đã thành hình" : (kind == "photo-processed" ? "Khoảnh khắc đã hậu kỳ" : "Khoảnh khắc nguyên bản"))},
       {"mediaType", video ? "video" : "image"},
       {"mediaUrl", "/media/" + session.value("id", "") + "/" + id},
       {"downloadUrl", "/media/" + session.value("id", "") + "/" + id + "?download=1"}
@@ -332,14 +327,6 @@ int main(int argc, char** argv) {
         response.set_header("Cache-Control", "private, max-age=300");
         response.set_header("X-Content-Type-Options", "nosniff");
         response.set_file_content(path, mime);
-        return;
-      }
-    }
-    if (item->contains("driveFileId") && (*item)["driveFileId"].is_string()) {
-      const auto drive_id = (*item)["driveFileId"].get<std::string>();
-      if (safe_drive_id(drive_id)) {
-        response.status = 302;
-        response.set_header("Location", "https://drive.google.com/uc?export=" + std::string(download ? "download" : "view") + "&id=" + drive_id);
         return;
       }
     }

@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { applyPhotoFilterBuffer } from './photo-filter-processor.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -23,7 +24,7 @@ export class NativeBridge {
     }
   }
 
-  async trigger(sessionId, dslrConfig) {
+  async trigger(sessionId, dslrConfig, photoFilterId = 'natural') {
     if (!dslrConfig.program) throw new Error('Chưa cấu hình chương trình điều khiển DSLR');
     const sessionDirectory = this.localStore.sessionPath(sessionId);
     await fs.mkdir(sessionDirectory, { recursive: true });
@@ -33,7 +34,9 @@ export class NativeBridge {
     for (const arg of adapterArgs) args.push('--arg', arg);
     try {
       await execFileAsync(this.executable, args, { windowsHide: true, timeout: (dslrConfig.timeoutMs ?? 30000) + 2000 });
-      const data = await fs.readFile(output);
+      const source = await fs.readFile(output);
+      const data = await applyPhotoFilterBuffer(source, photoFilterId);
+      if (!data.equals(source)) await fs.writeFile(output, data);
       const item = await this.localStore.registerExisting({ sessionId, kind: 'dslr-original', filePath: output });
       await fs.unlink(output).catch(() => {});
       return { item, dataUrl: `data:image/jpeg;base64,${data.toString('base64')}` };

@@ -1,4 +1,7 @@
 node_modules/
+.env
+.env.*
+!.env.example
 dist/
 native/build/
 release/
@@ -13,3 +16,9 @@ release-sharp3
 DESIGNIDEAS
 tiếptucss.txt
 NEW_FIX.txt
+.codegraph/
+src.zip
+full.diff
+web/.next/
+web/node_modules/
+

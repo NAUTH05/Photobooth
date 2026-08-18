@@ -20,7 +20,8 @@ export function normalizePhotoTransform(transform = {}) {
     panX: Math.max(0, Math.min(100, panX)),
     panY: Math.max(0, Math.min(100, panY)),
     zoom: Math.max(1, Math.min(4, zoom)),
-    rotation: ((rotation % 360) + 360) % 360
+    rotation: ((rotation % 360) + 360) % 360,
+    mirrored: transform.mirrored === true
   };
 }
 

@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { normalizeConfig } from './config-schema.js';
 
 function parseEnvValue(raw) {
   let quote = '';
@@ -47,13 +48,12 @@ export function envConfigPatch(values, appPath) {
   return {
     camera: {
       mirrorPreview: envBoolean(values.MIRROR_PREVIEW, true),
-      mirrorOutput: envBoolean(values.MIRROR_OUTPUT, false)
     },
     gallery: { port },
     frames: { localDir: framesValue },
     branding: {
-      name: values.BRANDING_NAME || 'Roti Photobooth',
-      tagline: values.BRANDING_TAGLINE || 'Giữ lại khoảnh khắc của bạn'
+      name: values.BRANDING_NAME || 'Chạm Photobooth',
+      tagline: values.BRANDING_TAGLINE || 'Gói nụ cười mang về nha~'
     },
     print: {
       enabled: envBoolean(values.PRINT_ENABLED, true),
@@ -124,26 +124,27 @@ export class ConfigStore {
     try { envValues = parseEnv(await fs.readFile(path.join(path.dirname(this.defaultPath), '..', '.env'), 'utf8')); } catch { }
     let user = {};
     try { user = JSON.parse(await fs.readFile(this.userPath, 'utf8')); } catch { }
-    if (user.drive?.oauthRefreshTokenEncrypted && this.secretCodec) {
-      try { user.drive.oauthRefreshToken = this.secretCodec.decrypt(user.drive.oauthRefreshTokenEncrypted); } catch { }
+    if (user.cloudflare?.uploadSecretEncrypted && this.secretCodec) {
+      try { user.cloudflare.uploadSecret = this.secretCodec.decrypt(user.cloudflare.uploadSecretEncrypted); } catch { }
     }
-    this.value = merge(merge(defaults, envConfigPatch(envValues, path.dirname(path.dirname(this.defaultPath)))), user);
+    this.value = normalizeConfig(merge(merge(defaults, envConfigPatch(envValues, path.dirname(path.dirname(this.defaultPath)))), user));
     return this.value;
   }
 
   get() { return structuredClone(this.value); }
 
   async save(next) {
-    this.value = merge(this.value, next);
+    const merged = normalizeConfig(merge(this.value, next));
     await fs.mkdir(path.dirname(this.userPath), { recursive: true });
     const temporary = `${this.userPath}.tmp`;
-    const diskValue = structuredClone(this.value);
-    if (diskValue.drive?.oauthRefreshToken && this.secretCodec) {
-      diskValue.drive.oauthRefreshTokenEncrypted = this.secretCodec.encrypt(diskValue.drive.oauthRefreshToken);
-      delete diskValue.drive.oauthRefreshToken;
+    const diskValue = structuredClone(merged);
+    if (diskValue.cloudflare?.uploadSecret && this.secretCodec) {
+      diskValue.cloudflare.uploadSecretEncrypted = this.secretCodec.encrypt(diskValue.cloudflare.uploadSecret);
+      delete diskValue.cloudflare.uploadSecret;
     }
     await fs.writeFile(temporary, JSON.stringify(diskValue, null, 2), 'utf8');
     await fs.rename(temporary, this.userPath);
+    this.value = merged;
     return this.get();
   }
 }

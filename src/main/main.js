@@ -1,29 +1,36 @@
-import { app, BrowserWindow, ipcMain, safeStorage, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, session } from 'electron';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ConfigStore } from './config.js';
+import { CubeLutManager } from './cube-lut-manager.js';
+import { CloudflareGalleryClient } from './cloudflare-gallery-client.js';
+import { CloudflareUploadManager } from './cloudflare-upload-manager.js';
 import { CppGalleryBackend } from './cpp-gallery-backend.js';
-import { DriveClient } from './drive-client.js';
 import { FrameManager } from './frame-manager.js';
+import { GradedPhotoService } from './graded-photo-service.js';
 import { mainFrameHandler } from './ipc-guard.js';
 import { LocalStore } from './local-store.js';
 import { NativeBridge } from './native-bridge.js';
+import { RemoteAssetManager } from './remote-asset-manager.js';
 import { SharpCompositor } from './sharp-compositor.js';
 import { TimelapseProcessor } from './timelapse-processor.js';
-import { UploadManager } from './upload-manager.js';
+import { shutdownLutPool } from './lut-processor.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow;
 let configStore;
 let localStore;
 let frameManager;
-let uploader;
+let cloudUploader;
 let nativeBridge;
 let galleryServer;
 let timelapseProcessor;
 let sharpCompositor;
+let lutManager;
+let gradedPhotoService;
+let assetManager;
 let cleanupTimer;
 let frameSyncTimer;
 let cleanupStarted = false;
@@ -40,12 +47,24 @@ app.on('second-instance', () => {
 
 const publicConfig = (config) => {
   const value = structuredClone(config);
-  if (value.drive) {
-    value.drive.oauthRefreshToken = value.drive.oauthRefreshToken ? '••••••••' : '';
-    delete value.drive.oauthRefreshTokenEncrypted;
+  if (value.cloudflare) {
+    value.cloudflare.uploadSecret = value.cloudflare.uploadSecret ? '••••••••' : '';
+    delete value.cloudflare.uploadSecretEncrypted;
   }
   return value;
 };
+
+const galleryUrlFor = (sessionValue) => {
+  const config = configStore.get();
+  if (config.cloudflare?.enabled && config.cloudflare.baseUrl) return new CloudflareGalleryClient(config.cloudflare).urlFor(sessionValue);
+  return galleryServer.urlFor(sessionValue);
+};
+
+async function syncCreativeAssets() {
+  const result = await assetManager.sync();
+  if (result.skipped) await frameManager.sync();
+  return result;
+}
 
 async function createWindow() {
   const config = configStore.get();
@@ -57,6 +76,18 @@ async function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false,
       sandbox: true, spellcheck: false
     }
+  });
+  const rendererSession = mainWindow.webContents.session;
+  rendererSession.setPermissionCheckHandler((webContents, permission, _origin, details) => (
+    webContents === mainWindow.webContents
+    && permission === 'media'
+    && details?.isMainFrame !== false
+    && details?.mediaType !== 'audio'
+  ));
+  rendererSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const mediaTypes = Array.isArray(details?.mediaTypes) ? details.mediaTypes : [];
+    const videoOnly = !mediaTypes.length || mediaTypes.every((type) => type === 'video');
+    callback(webContents === mainWindow.webContents && permission === 'media' && videoOnly);
   });
   if (!app.isPackaged && process.env.VITE_DEV_SERVER_URL) {
     const developmentUrl = new URL(process.env.VITE_DEV_SERVER_URL);
@@ -76,19 +107,19 @@ function registerIpc() {
   handle('config:get', () => publicConfig(configStore.get()));
   handle('config:save', async (_event, patch) => {
     const current = configStore.get();
-    if (patch?.drive?.oauthRefreshToken === '••••••••') patch.drive.oauthRefreshToken = current.drive.oauthRefreshToken;
+    if (patch?.cloudflare?.uploadSecret === '••••••••') patch.cloudflare.uploadSecret = current.cloudflare.uploadSecret;
     return publicConfig(await configStore.save(patch));
   });
   handle('session:create', (_event, mode) => localStore.createSession(mode, configStore.get().gallery.expirationDays));
   handle('artifact:save', (_event, payload) => localStore.saveArtifact(payload));
   handle('session:finish', async (_event, sessionId) => {
     const result = await localStore.finishSession(sessionId);
-    uploader.process().catch(() => { });
-    return { sessionId, status: result.status, galleryUrl: galleryServer.urlFor(result) };
+    cloudUploader.process().catch(() => { });
+    return { sessionId, status: result.status, galleryUrl: galleryUrlFor(result) };
   });
   handle('session:cancel', async (_event, sessionId) => {
     const result = await localStore.cancelSession(sessionId);
-    uploader.process().catch(() => { });
+    cloudUploader.process().catch(() => { });
     return result;
   });
   handle('session:list-recoverable', () => localStore.listRecoverableSessions());
@@ -99,19 +130,41 @@ function registerIpc() {
     const result = await localStore.readResult(sessionId);
     const sessionValue = localStore.queue.sessions[sessionId];
     if (['capturing', 'recoverable'].includes(sessionValue.status)) await localStore.finishSession(sessionId);
-    uploader.process().catch(() => { });
-    return { ...result, session: { ...result.session, status: localStore.queue.sessions[sessionId].status }, galleryUrl: galleryServer.urlFor(localStore.queue.sessions[sessionId]) };
+    cloudUploader.process().catch(() => { });
+    return { ...result, session: { ...result.session, status: localStore.queue.sessions[sessionId].status }, galleryUrl: galleryUrlFor(localStore.queue.sessions[sessionId]) };
   });
   handle('session:acknowledge-result', (_event, sessionId) => localStore.acknowledgeResult(sessionId));
   handle('session:resume', (_event, sessionId) => localStore.resumeSession(sessionId));
   handle('session:read-originals', (_event, payload) => localStore.readOriginals(payload?.sessionId, payload?.artifactIds));
   handle('session:save-draft', (_event, payload) => localStore.saveDraft(payload));
   handle('queue:stats', () => localStore.stats());
-  handle('queue:retry', async () => { await uploader.process(); return localStore.stats(); });
+  handle('queue:retry', async () => {
+    await cloudUploader.retryFailed();
+    await cloudUploader.process();
+    return localStore.stats();
+  });
   handle('timelapse:encode', (_event, payload) => timelapseProcessor.encode(payload));
   handle('frames:list', () => frameManager.list());
-  handle('frames:sync', () => frameManager.sync());
+  handle('frames:sync', async () => {
+    const assetSync = await syncCreativeAssets();
+    return { ...(await frameManager.list()), assetSync };
+  });
   handle('frames:analyze', (_event, frameId) => frameManager.resolve(frameId));
+  handle('assets:status', () => assetManager.status());
+  handle('luts:list', () => lutManager.list());
+  handle('luts:import', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Thêm LUT màu cho photobooth',
+      buttonLabel: 'Cài LUT',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'LUT 3D (.cube)', extensions: ['cube'] }]
+    });
+    if (result.canceled || !result.filePaths.length) return { cancelled: true, imported: [], luts: lutManager.list() };
+    const imported = await lutManager.importFiles(result.filePaths);
+    return { cancelled: false, imported, luts: lutManager.list() };
+  });
+  handle('luts:render-artifact', (_event, payload) => gradedPhotoService.renderPreview(payload || {}));
+  handle('luts:prepare-session', (_event, payload) => gradedPhotoService.prepareSession(payload || {}));
   const validateCompositeRequest = (payload) => {
     if (![4, 6, 8].includes(payload?.artifactIds?.length)) throw new Error('Số ảnh ghép phải là 4, 6 hoặc 8');
     return payload;
@@ -121,17 +174,21 @@ function registerIpc() {
   handle('gallery:url', (_event, sessionId) => {
     const sessionValue = localStore.queue.sessions[sessionId];
     if (!sessionValue) throw new Error('Session not found');
-    return galleryServer.urlFor(sessionValue);
+    return galleryUrlFor(sessionValue);
   });
   handle('gallery:health', () => galleryServer.health());
-  handle('drive:authorize', async (_event, oauthClientFile) => {
-    const refreshToken = await DriveClient.authorize(oauthClientFile, (url) => shell.openExternal(url));
-    await configStore.save({ drive: { oauthClientFile, oauthRefreshToken: refreshToken, enabled: true } });
-    return { ok: true };
-  });
   handle('native:health', () => nativeBridge.health());
-  handle('native:trigger', (_event, sessionId) => nativeBridge.trigger(sessionId, configStore.get().camera.dslr));
+  handle('native:trigger', (_event, payload) => {
+    const request = typeof payload === 'string' ? { sessionId: payload } : (payload || {});
+    return nativeBridge.trigger(request.sessionId, configStore.get().camera.dslr, 'natural');
+  });
+  let printJobRunning = false;
   handle('print:image', async (_event, payload) => {
+    if (printJobRunning) return { ok: false, error: 'Đang in rồi, đợi xong nhé~' };
+    printJobRunning = true;
+    let tempImgPath = null;
+    let tempHtmlPath = null;
+    try {
     const config = configStore.get().print;
     if (!config.enabled) return { ok: false, error: 'Printing is disabled' };
     const request = typeof payload === 'string' ? { dataUrl: payload } : (payload || {});
@@ -176,6 +233,19 @@ function registerIpc() {
     const requestedCopies = Number.isFinite(Number(request.copies)) && Number(request.copies) >= 1
       ? Math.min(10, Math.round(Number(request.copies))) : undefined;
     const copies = requestedCopies ?? config.copies ?? 1;
+    const printJob = await localStore.recordPrintJob(request.sessionId, {
+      profile, copies, deviceName, status: 'queued'
+    });
+    const finishPrintJob = async (result) => {
+      if (printJob) {
+        await localStore.recordPrintJob(request.sessionId, {
+          ...printJob,
+          status: result.ok ? 'printed' : 'failed',
+          error: result.ok ? null : result.error
+        });
+      }
+      return result;
+    };
 
     let orientation = 'portrait';
     let widthMm = 101.6;
@@ -202,6 +272,7 @@ function registerIpc() {
       }
     }
 
+    let printedCopies = 0;
     if (process.platform === 'win32') {
       try {
         const appPath = app.getAppPath();
@@ -209,7 +280,7 @@ function registerIpc() {
           ? path.join(process.resourcesPath, 'scripts', 'print_image.ps1')
           : path.join(appPath, 'scripts', 'print_image.ps1');
 
-        const tempImgPath = path.join(os.tmpdir(), `print_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`);
+        tempImgPath = path.join(os.tmpdir(), `print_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`);
         const base64Data = dataUrl.replace(/^data:image\/[^;]+;base64,/, '');
         await fs.writeFile(tempImgPath, Buffer.from(base64Data, 'base64'));
 
@@ -232,27 +303,49 @@ function registerIpc() {
 
         for (let i = 0; i < copies; i += 1) {
           await execFileAsync('powershell.exe', args, { windowsHide: true, timeout: 30000 });
+          printedCopies += 1;
         }
-        try { await fs.unlink(tempImgPath); } catch {}
-        return { ok: true };
+        return await finishPrintJob({ ok: true });
       } catch (psErr) {
-        console.warn('Smart PowerShell print failed, falling back to Chromium print:', psErr.message);
+        console.warn(`PowerShell printed ${printedCopies}/${copies}, falling back to Chromium for remaining:`, psErr.message);
+      } finally {
+        if (tempImgPath) {
+          try { await fs.unlink(tempImgPath); } catch {}
+          tempImgPath = null;
+        }
       }
     }
 
-    const tempHtmlPath = path.join(os.tmpdir(), `print_page_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.html`);
+    // Chromium fallback — only print remaining copies
+    const remainingCopies = copies - printedCopies;
+    if (remainingCopies <= 0) return await finishPrintJob({ ok: true });
+
+    tempHtmlPath = path.join(os.tmpdir(), `print_page_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.html`);
     const html = `<!doctype html><style>@page{margin:0;size:${orientation}}html,body{margin:0;width:100%;height:100%;overflow:hidden}img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transform:translate(${offsetX}mm,${offsetY}mm)}</style><img src="${dataUrl}">`;
     await fs.writeFile(tempHtmlPath, html, 'utf8');
     const printWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
     try {
       await printWindow.loadFile(tempHtmlPath);
-      return await new Promise((resolve) => printWindow.webContents.print({
+      const result = await new Promise((resolve) => printWindow.webContents.print({
         silent: config.silent, deviceName: deviceName || undefined, printBackground: true,
-        copies, pageSize: { width: config.pageWidthMicrons, height: config.pageHeightMicrons }, landscape: isLandscape
+        copies: remainingCopies, pageSize: { width: config.pageWidthMicrons, height: config.pageHeightMicrons }, landscape: isLandscape
       }, (success, failureReason) => resolve({ ok: success, error: failureReason })));
+      return await finishPrintJob(result);
+    } catch (error) {
+      await finishPrintJob({ ok: false, error: String(error?.message || error) });
+      throw error;
     } finally {
       printWindow.destroy();
-      try { await fs.unlink(tempHtmlPath); } catch {}
+      if (tempHtmlPath) {
+        try { await fs.unlink(tempHtmlPath); } catch {}
+        tempHtmlPath = null;
+      }
+    }
+    } finally {
+      printJobRunning = false;
+      // Final safety cleanup for any temp files
+      if (tempImgPath) { try { await fs.unlink(tempImgPath); } catch {} }
+      if (tempHtmlPath) { try { await fs.unlink(tempHtmlPath); } catch {} }
     }
   });
 }
@@ -287,8 +380,9 @@ async function cleanupServices() {
   if (frameSyncTimer) clearInterval(frameSyncTimer);
   cleanupTimer = null;
   frameSyncTimer = null;
-  uploader?.stop();
+  cloudUploader?.stop();
   galleryServer?.stop();
+  await shutdownLutPool().catch((error) => console.error('LUT worker pool shutdown error:', error));
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
 }
 
@@ -304,20 +398,30 @@ app.whenReady().then(async () => {
   await configStore.load();
   localStore = new LocalStore(runtimeRoot);
   await localStore.init();
+  const agedRemoved = await localStore.cleanupByAge(7).catch((error) => { console.error('Age-based cleanup failed', error); return 0; });
+  if (agedRemoved) console.log(`Cleaned up ${agedRemoved} local file(s) older than 7 days`);
   timelapseProcessor = new TimelapseProcessor(localStore, configStore);
-  const driveFactory = (config) => new DriveClient(config);
   const bundledFramesDir = app.isPackaged
     ? path.join(process.resourcesPath, 'frames')
     : path.join(appPath, 'frames');
   const framesCacheDir = path.join(runtimeRoot, 'frames');
   frameManager = new FrameManager(
     framesCacheDir,
-    driveFactory,
     configStore,
     bundledFramesDir
   );
   await frameManager.init();
-  sharpCompositor = new SharpCompositor(localStore, frameManager, configStore);
+  lutManager = new CubeLutManager(path.join(runtimeRoot, 'luts'));
+  await lutManager.init();
+  assetManager = new RemoteAssetManager({
+    framesRoot: framesCacheDir,
+    lutsRoot: path.join(runtimeRoot, 'luts'),
+    configStore,
+    frameManager,
+    lutManager
+  });
+  gradedPhotoService = new GradedPhotoService(localStore, lutManager);
+  sharpCompositor = new SharpCompositor(localStore, frameManager, configStore, lutManager);
   nativeBridge = new NativeBridge(appPath, localStore, app.isPackaged ? process.resourcesPath : null);
   galleryServer = new CppGalleryBackend(
     appPath,
@@ -326,16 +430,26 @@ app.whenReady().then(async () => {
     app.isPackaged ? process.resourcesPath : null
   );
   await galleryServer.start();
-  uploader = new UploadManager(localStore, driveFactory, configStore);
-  uploader.on('status', (message) => mainWindow?.webContents.send('upload:status', message));
+  cloudUploader = new CloudflareUploadManager(localStore, configStore);
+  cloudUploader.on('status', (message) => mainWindow?.webContents.send('upload:status', message));
   registerIpc();
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => callback(permission === 'media' && webContents === mainWindow?.webContents));
   await createWindow();
-  uploader.start();
+  syncCreativeAssets()
+    .then((result) => mainWindow?.webContents.send('assets:synced', result))
+    .catch((error) => {
+      console.warn('Creative asset sync failed; keeping local cache:', error.message);
+      mainWindow?.webContents.send('assets:synced', { ok: false, error: error.message });
+    });
+  cloudUploader.start();
   const cleanupMs = Math.max(1, configStore.get().storage.cleanupMinutes) * 60000;
-  cleanupTimer = setInterval(() => localStore.cleanup(configStore.get().storage.retentionHoursAfterUpload).catch((error) => console.error('Local cleanup failed', error)), cleanupMs);
-  const syncMs = Math.max(1, configStore.get().drive.syncFramesMinutes) * 60000;
-  frameSyncTimer = setInterval(() => frameManager.sync().catch(() => { }), syncMs);
+  cleanupTimer = setInterval(() => {
+    const config = configStore.get();
+    localStore.cleanup(config.storage.retentionHoursAfterUpload, { requireCloudflare: Boolean(config.cloudflare?.enabled) })
+      .catch((error) => console.error('Local cleanup failed', error));
+  }, cleanupMs);
+  const syncMs = Math.max(1, configStore.get().assets?.syncMinutes || 15) * 60000;
+  frameSyncTimer = setInterval(() => syncCreativeAssets().catch(() => { }), syncMs);
 }).catch(async (error) => {
   console.error('Photobooth startup failed', error);
   process.exitCode = 1;

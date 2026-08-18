@@ -8,7 +8,6 @@
     "height": 1080,
     "facingMode": "user",
     "mirrorPreview": true,
-    "mirrorOutput": false,
     "candidateCount": 6,
     "captureWorkflow": "manual",
     "countdownSeconds": 3,
@@ -20,20 +19,25 @@
       "timeoutMs": 30000
     }
   },
-  "drive": {
+  "cloudflare": {
     "enabled": false,
-    "rootFolderId": "",
-    "framesFolderId": "",
-    "serviceAccountFile": "",
-    "oauthClientFile": "",
-    "oauthRefreshToken": "",
-    "makeSessionPublic": true,
-    "syncFramesMinutes": 15
+    "baseUrl": "",
+    "uploadSecret": "",
+    "uploadIntervalSeconds": 5,
+    "requestTimeoutSeconds": 180
+  },
+  "assets": {
+    "enabled": true,
+    "baseUrl": "https://cham-photobooth-gallery-a214a2a763e4.herokuapp.com",
+    "syncMinutes": 5,
+    "requestTimeoutSeconds": 30
   },
   "storage": {
     "retentionHoursAfterUpload": 24,
     "cleanupMinutes": 10,
-    "maxRetryMinutes": 30
+    "maxRetryMinutes": 30,
+    "retryBaseSeconds": 5,
+    "retryJitterPercent": 20
   },
   "gallery": {
     "host": "0.0.0.0",
@@ -76,8 +80,8 @@
     "offset4x6LandscapeY": 0
   },
   "branding": {
-    "name": "Roti Photobooth",
-    "tagline": "Giữ lại khoảnh khắc của bạn",
+    "name": "Chạm Photobooth",
+    "tagline": "Gói nụ cười mang về nha~",
     "accent": "#ef765e"
   }
 }

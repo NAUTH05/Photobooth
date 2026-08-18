@@ -19,7 +19,6 @@ test('legacy .env values configure printer, QR, resolution and non-mirrored outp
     TIMELAPSE_ENABLED=true
     TIMELAPSE_VIDEO_BITS_PER_SECOND=4000000
     MIRROR_PREVIEW=true
-    MIRROR_OUTPUT=false
     LOCAL_FRAMES_DIR=./frames
   `);
   const root = path.resolve('example-app');
@@ -36,7 +35,6 @@ test('legacy .env values configure printer, QR, resolution and non-mirrored outp
   assert.equal(config.timelapse.crf, 5);
   assert.equal(config.timelapse.videoBitsPerSecond, 4000000);
   assert.equal(config.camera.mirrorPreview, true);
-  assert.equal(config.camera.mirrorOutput, false);
   assert.equal(config.frames.localDir, path.resolve(root, 'frames'));
 });
 

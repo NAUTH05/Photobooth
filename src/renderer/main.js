@@ -1,5 +1,6 @@
 import QRCode from 'qrcode';
 import { containRect } from '../shared/image-layout.js';
+import { LUT_PRESETS } from '../shared/lut-presets.js';
 import { DEFAULT_FOOTER_HEIGHT, frameSupportsCount, PRINT_HEIGHT, PRINT_WIDTH, resolvePhotoSlots } from '../shared/photo-layout.js';
 import { assignArtifact, clearSlot, createSlotAssignments, moveSlot, normalizeTargetCount, validateSlotAssignments } from '../shared/slot-assignments.js';
 import './styles.css';
@@ -15,10 +16,79 @@ const state = {
   resultDataUrl: '', resultBlob: null, resultProfile: '4x6-portrait', resultArtifactId: '', busy: false, uploadUnsubscribe: null, shots: [], sessionFinished: false,
   selectedShotIndexes: new Set(), selectionTargetCount: 4, slotAssignments: [], activeSlotIndex: -1, pendingArtifactId: '',
   galleryUrl: '', qrDataUrl: '', framePreviewUrl: '', previewVersion: 0, frameSelectionGeneration: 0,
-  timelapseRecording: null, timelapseSavePromise: null, photoTransforms: {}, activeTransformId: '', previewTimer: null, draftTimer: null,
+  timelapseRecording: null, timelapseSavePromise: null, photoTransforms: {}, activeTransformId: '', previewTimer: null, previewPayloadSignature: '', draftTimer: null,
   printCopies: 1, zoomScale: 1, zoomTranslateX: 0, zoomTranslateY: 0, isZoomDragging: false, zoomDragStartX: 0, zoomDragStartY: 0,
-  zoomReturnFocus: null, recoveryShotUrls: new Set(), captureGeneration: 0, navigatedFromSessions: false
+  zoomReturnFocus: null, recoveryShotUrls: new Set(), captureGeneration: 0, navigatedFromSessions: false, lutId: 'natural',
+  luts: LUT_PRESETS.map(({ table: _table, ...lut }) => lut), lutPreviewUrls: new Map(), lutPreviewGeneration: 0,
 };
+
+function availableLut(value = state.lutId) {
+  return state.luts.find((lut) => lut.id === String(value || ''))
+    || state.luts.find((lut) => lut.id === 'natural')
+    || state.luts[0];
+}
+
+const normalizeAvailableLutId = (value) => availableLut(value)?.id || 'natural';
+
+const lutPreviewKey = (shot, maxWidth) => `${shot.artifactId}:${state.lutId}:${maxWidth}`;
+
+function clearLutPreviewUrls() {
+  state.lutPreviewGeneration += 1;
+  for (const url of state.lutPreviewUrls.values()) URL.revokeObjectURL(url);
+  state.lutPreviewUrls.clear();
+}
+
+async function requestShotLutPreview(shot, maxWidth) {
+  if (state.lutId === 'natural') return shot.dataUrl;
+  const key = lutPreviewKey(shot, maxWidth);
+  if (state.lutPreviewUrls.has(key)) return state.lutPreviewUrls.get(key);
+  const selectedLutId = state.lutId;
+  const result = await window.photobooth.luts.renderArtifact({
+    sessionId: state.session?.id,
+    artifactId: shot.artifactId,
+    lutId: selectedLutId,
+    maxWidth
+  });
+  if (selectedLutId !== state.lutId) return '';
+  const url = URL.createObjectURL(bytesToBlob(result));
+  state.lutPreviewUrls.set(key, url);
+  while (state.lutPreviewUrls.size > 40) {
+    const oldestKey = state.lutPreviewUrls.keys().next().value;
+    URL.revokeObjectURL(state.lutPreviewUrls.get(oldestKey));
+    state.lutPreviewUrls.delete(oldestKey);
+  }
+  return url;
+}
+
+async function refreshShotLutPreviews() {
+  const generation = ++state.lutPreviewGeneration;
+  renderPhotoGallery();
+  if (state.lutId === 'natural' || !state.session) return;
+  for (const shot of selectedShots()) {
+    try {
+      await requestShotLutPreview(shot, 900);
+      if (generation !== state.lutPreviewGeneration) return;
+      renderPhotoGallery();
+    } catch (error) {
+      if (generation === state.lutPreviewGeneration) console.error('Không tạo được preview LUT cho ảnh lẻ', error);
+    }
+  }
+}
+
+async function openShotZoom(shot) {
+  const thumbnail = state.lutPreviewUrls.get(lutPreviewKey(shot, 900));
+  openZoom(thumbnail || shot.dataUrl, thumbnail ? 'none' : (availableLut().css || 'none'));
+  if (state.lutId === 'natural') return;
+  const selectedLutId = state.lutId;
+  try {
+    const url = await requestShotLutPreview(shot, 2600);
+    if (!url || selectedLutId !== state.lutId || !$('#zoomModal')?.classList.contains('open')) return;
+    $('#zoomImage').src = url;
+    $('#zoomImage').style.filter = 'none';
+  } catch (error) {
+    toast(`Oops, chưa mở được ảnh lớn: ${error.message}`);
+  }
+}
 
 function showScreen(id) {
   $$('.screen').forEach((screen) => screen.classList.toggle('active', screen.id === id));
@@ -35,17 +105,23 @@ function toast(message) {
 async function refreshStats() {
   const stats = await window.photobooth.queue.stats();
   const pill = $('#queuePill');
-  pill.classList.toggle('busy', stats.pending > 0);
-  pill.classList.toggle('error', stats.failed > 0);
-  pill.querySelector('span').textContent = stats.pending ? `${stats.pending} phiên đang chờ` : 'Đã đồng bộ';
-  $('#queueStats').innerHTML = `Phiên chờ upload: <b>${stats.pending}</b><br>Phiên có thể khôi phục: <b>${stats.recoverable || 0}</b><br>Phiên đã upload: <b>${stats.uploaded}</b><br>Dữ liệu local: <b>${(stats.localBytes / 1048576).toFixed(1)} MB</b>`;
+  pill.classList.toggle('busy', stats.pending > 0 || stats.cloudPending > 0);
+  pill.classList.toggle('error', stats.failed > 0 || stats.cloudFailed > 0);
+  pill.querySelector('span').textContent = (stats.pending || stats.cloudPending) ? `${Math.max(stats.pending, stats.cloudPending)} bộ ảnh đang lưu nè~` : 'Mọi ảnh đã an toàn ✨';
+  $('#queueStats').innerHTML = `Đang lưu album online: <b>${stats.cloudPending || 0}</b><br>Có thể tiếp tục: <b>${stats.recoverable || 0}</b><br>Đã lưu xong: <b>${stats.uploaded}</b><br>Dung lượng trên máy: <b>${(stats.localBytes / 1048576).toFixed(1)} MB</b>`;
 }
 
 async function loadFrames(force = false) {
   const manifest = force ? await window.photobooth.frames.sync() : await window.photobooth.frames.list();
+  const selectedFrameId = state.selectedFrame?.id;
   state.frames = manifest.frames;
-  state.selectedFrame = state.frames[0] ?? null;
+  state.selectedFrame = state.frames.find((frame) => frame.id === selectedFrameId) ?? state.frames[0] ?? null;
+  if (force) {
+    state.luts = await window.photobooth.luts.list();
+    renderLutOptions();
+  }
   renderFrames();
+  return manifest;
 }
 
 function selectedShots() {
@@ -122,8 +198,20 @@ function compositePayload(frame = state.selectedFrame) {
     artifactIds: [...(state.slotAssignments || [])],
     frameId: frame?.id || '',
     transforms: structuredClone(state.photoTransforms || {}),
+    lutId: state.lutId,
     qrDataUrl: state.qrDataUrl || ''
   };
+}
+
+function compositePayloadSignature(payload = compositePayload()) {
+  return JSON.stringify(payload);
+}
+
+function syncConfirmFrameButton() {
+  const button = $('#confirmFrame');
+  if (!button) return;
+  const complete = validateSlotAssignments(state.slotAssignments, selectedArtifactIds(), state.selectionTargetCount);
+  button.disabled = !complete || state.previewPayloadSignature !== compositePayloadSignature();
 }
 
 function bytesToBlob(result) {
@@ -132,9 +220,10 @@ function bytesToBlob(result) {
 
 function scheduleFramePreview(delay = 80) {
   clearTimeout(state.previewTimer);
+  syncConfirmFrameButton();
   const version = ++state.previewVersion;
   state.previewTimer = setTimeout(() => updateFramePreview(version).catch((error) => {
-    if (version === state.previewVersion) toast(`Không dựng được preview: ${error.message}`);
+    if (version === state.previewVersion) toast(`Oops, chưa cập nhật được xem trước: ${error.message}`);
   }), delay);
 }
 
@@ -162,41 +251,13 @@ function ensureTransformControls() {
   panel = document.createElement('div');
   panel.id = 'photoTransformControls';
   panel.className = 'photo-transform-controls';
-  panel.innerHTML = '<div class="transform-shots"></div><label>Crop zoom <input class="transform-zoom" type="range" min="1" max="4" step="0.05" value="1"></label><div class="transform-buttons"><button type="button" data-pan="left">←</button><button type="button" data-pan="up">↑</button><button type="button" data-pan="down">↓</button><button type="button" data-pan="right">→</button><button type="button" data-rotate="-90">↶</button><button type="button" data-rotate="90">↷</button><button type="button" data-reset>Đặt lại</button></div><button type="button" class="crop-open-btn" id="openCropModalBtn">✂ Cắt & Chọn vùng (Avatar Crop)</button>';
+  panel.innerHTML = '<button type="button" class="crop-open-btn" id="openCropModalBtn">✂ Căn lại khoảnh khắc</button>';
   $('#photoTransformHost').append(panel);
-  const changed = () => { scheduleFramePreview(); scheduleDraftSave(); };
-  panel.querySelector('.transform-zoom').oninput = (event) => {
-    const transform = state.photoTransforms[state.activeTransformId];
-    if (!transform) return;
-    transform.zoom = Number(event.target.value);
-    changed();
-  };
-  panel.querySelectorAll('[data-pan]').forEach((button) => button.onclick = () => {
-    const transform = state.photoTransforms[state.activeTransformId];
-    if (!transform) return;
-    const direction = button.dataset.pan;
-    if (direction === 'left') transform.panX = Math.max(0, transform.panX - 5);
-    if (direction === 'right') transform.panX = Math.min(100, transform.panX + 5);
-    if (direction === 'up') transform.panY = Math.max(0, transform.panY - 5);
-    if (direction === 'down') transform.panY = Math.min(100, transform.panY + 5);
-    changed();
-  });
-  panel.querySelectorAll('[data-rotate]').forEach((button) => button.onclick = () => {
-    const transform = state.photoTransforms[state.activeTransformId];
-    if (!transform) return;
-    transform.rotation = (transform.rotation + Number(button.dataset.rotate) + 360) % 360;
-    changed();
-  });
-  panel.querySelector('[data-reset]').onclick = () => {
-    if (!state.activeTransformId) return;
-    state.photoTransforms[state.activeTransformId] = { panX: 50, panY: 50, zoom: 1, rotation: 0 };
-    renderTransformControls(); changed();
-  };
   const cropBtn = panel.querySelector('#openCropModalBtn');
   if (cropBtn) {
     cropBtn.onclick = () => {
       if (state.activeTransformId) openCropModal(state.activeTransformId);
-      else toast('Hãy chọn ô ảnh muốn cắt');
+      else toast('Hãy chọn một ô ảnh trước nha~');
     };
   }
   return panel;
@@ -204,39 +265,47 @@ function ensureTransformControls() {
 
 function renderTransformControls() {
   const panel = ensureTransformControls();
-  const container = panel.querySelector('.transform-shots');
-  container.replaceChildren();
-  state.slotAssignments.forEach((artifactId, index) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = artifactId ? `Ô ${index + 1}` : `Ô ${index + 1} trống`;
-    button.classList.toggle('active', index === state.activeSlotIndex);
-    button.disabled = !artifactId;
-    button.onclick = () => setActiveSlot(index);
-    container.append(button);
-  });
   const transform = state.photoTransforms[state.activeTransformId];
-  panel.querySelector('.transform-zoom').value = transform?.zoom || 1;
-  panel.querySelectorAll('input, .transform-buttons button').forEach((control) => { control.disabled = !transform; });
+  panel.querySelector('#openCropModalBtn').disabled = !transform;
+}
+
+function selectGalleryPhoto(artifactId, { openCrop = false } = {}) {
+  const assignedSlotIndex = state.slotAssignments.indexOf(artifactId);
+  if (assignedSlotIndex < 0) {
+    state.pendingArtifactId = artifactId;
+    renderFrameEditor();
+    if (openCrop) toast('Hãy đặt ảnh vào một ô trước nha~');
+    return;
+  }
+  setActiveSlot(assignedSlotIndex);
+  if (openCrop) openCropModal(artifactId);
 }
 
 function renderPhotoGallery() {
   const container = $('#framePhotoGallery');
   container.replaceChildren();
   selectedShots().forEach((shot, index) => {
+    const assignedSlotIndex = state.slotAssignments.indexOf(shot.artifactId);
     const card = document.createElement('div');
     card.className = `frame-photo${state.pendingArtifactId === shot.artifactId || state.activeTransformId === shot.artifactId ? ' active' : ''}`;
     card.draggable = true;
     card.tabIndex = 0;
     card.role = 'button';
-    card.setAttribute('aria-label', `Chọn ảnh ${index + 1} để gán vào khung`);
+    card.setAttribute('aria-label', assignedSlotIndex >= 0
+      ? `Chọn ảnh ${index + 1} ở ô ${assignedSlotIndex + 1} để chỉnh vị trí`
+      : `Chọn ảnh ${index + 1} để gán vào khung`);
     card.dataset.artifactId = shot.artifactId;
-    const image = document.createElement('img'); image.src = shot.dataUrl; image.alt = `Ảnh ${index + 1}`;
-    const label = document.createElement('small'); label.textContent = `IMAGE ${index + 1}`;
-    const view = document.createElement('button'); view.type = 'button'; view.className = 'photo-view'; view.textContent = '⤢'; view.title = 'Xem ảnh lớn';
-    view.onclick = (event) => { event.stopPropagation(); openZoom(shot.dataUrl); };
-    card.append(image, label, view);
-    card.onclick = () => { state.pendingArtifactId = shot.artifactId; renderFrameEditor(); };
+    const exactPreview = state.lutPreviewUrls.get(lutPreviewKey(shot, 900));
+    const image = document.createElement('img'); image.src = exactPreview || shot.dataUrl; image.alt = `Ảnh ${index + 1}`;
+    image.style.filter = exactPreview ? 'none' : (availableLut().css || 'none');
+    const label = document.createElement('small'); label.textContent = assignedSlotIndex >= 0 ? `ẢNH ${index + 1} · Ô ${assignedSlotIndex + 1}` : `ẢNH ${index + 1} · CHƯA XẾP`;
+    const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'photo-edit'; edit.textContent = '✂'; edit.title = assignedSlotIndex >= 0 ? `Căn lại ảnh ô ${assignedSlotIndex + 1}` : 'Đặt ảnh vào ô trước';
+    edit.disabled = assignedSlotIndex < 0;
+    edit.onclick = (event) => { event.stopPropagation(); selectGalleryPhoto(shot.artifactId, { openCrop: true }); };
+    const view = document.createElement('button'); view.type = 'button'; view.className = 'photo-view'; view.textContent = '⤢'; view.title = 'Ngắm ảnh thật rõ';
+    view.onclick = (event) => { event.stopPropagation(); openShotZoom(shot); };
+    card.append(image, label, edit, view);
+    card.onclick = () => selectGalleryPhoto(shot.artifactId);
     card.onkeydown = (event) => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); card.click(); }
     };
@@ -273,12 +342,12 @@ function renderSlotOverlay() {
     element.style.width = `${slot.width / frameWidth * 100}%`;
     element.style.height = `${slot.height / frameHeight * 100}%`;
     element.draggable = Boolean(artifactId);
-    const label = document.createElement('span'); label.textContent = artifactId ? `Ô ${index + 1}` : `THẢ ẢNH ${index + 1}`;
+    const label = document.createElement('span'); label.textContent = artifactId ? `Ô ${index + 1}` : `ĐẶT ẢNH ${index + 1} VÀO ĐÂY`;
     element.append(label);
     if (artifactId) {
       const clear = document.createElement('button'); clear.type = 'button'; clear.className = 'slot-clear'; clear.textContent = '×'; clear.title = 'Bỏ ảnh khỏi ô';
       clear.onclick = (event) => { event.stopPropagation(); updateAssignments(clearSlot(state.slotAssignments, index), index); };
-      const cropBtn = document.createElement('button'); cropBtn.type = 'button'; cropBtn.className = 'slot-crop-btn'; cropBtn.textContent = '✂'; cropBtn.title = 'Cắt & chọn vùng ảnh';
+      const cropBtn = document.createElement('button'); cropBtn.type = 'button'; cropBtn.className = 'slot-crop-btn'; cropBtn.textContent = '✂'; cropBtn.title = 'Căn lại ảnh';
       cropBtn.onclick = (event) => { event.stopPropagation(); setActiveSlot(index); openCropModal(artifactId); };
       element.append(cropBtn, clear);
     }
@@ -378,16 +447,16 @@ function renderFrameEditor() {
   renderSlotOverlay();
   renderTransformControls();
   const complete = validateSlotAssignments(state.slotAssignments, selectedArtifactIds(), state.selectionTargetCount);
-  $('#confirmFrame').disabled = !complete;
+  syncConfirmFrameButton();
   const assigned = state.slotAssignments.filter(Boolean).length;
-  $('#slotStatus').textContent = complete ? `Đã sắp xếp đủ ${assigned}/${state.selectionTargetCount} ảnh` : `Đã xếp ${assigned}/${state.selectionTargetCount} ảnh · hãy điền đủ các ô`;
+  $('#slotStatus').textContent = complete ? `Tuyệt vời · ${assigned}/${state.selectionTargetCount} ảnh đã vào đúng chỗ ✨` : `Đã xếp ${assigned}/${state.selectionTargetCount} tấm · lấp đầy ô còn lại nhé~`;
 }
 
-async function updateFramePreview(version) {
+async function updateFramePreview(version, fixedPayload = null, fixedFrame = null) {
   const image = $('#framePreviewImage');
   const frameContainer = $('#framePreview');
   const smile = $('.preview-smile');
-  const frame = state.selectedFrame;
+  const frame = fixedFrame || state.selectedFrame;
   if (frameContainer) frameContainer.style.background = `linear-gradient(145deg,${frame?.accent || '#f9d9cf'},#f8dfd6)`;
   if (!frame || !state.session?.id) {
     if (version !== state.previewVersion) return;
@@ -400,7 +469,7 @@ async function updateFramePreview(version) {
   if (smile) smile.style.display = 'block';
   await ensureFrameSlots(frame);
   if (version !== state.previewVersion || state.selectedFrame !== frame) return;
-  const payload = compositePayload(frame);
+  const payload = fixedPayload || compositePayload(frame);
   try {
     const result = await window.photobooth.composite.preview(payload);
     if (version !== state.previewVersion || state.selectedFrame !== frame) return;
@@ -413,9 +482,14 @@ async function updateFramePreview(version) {
     }
     if (frameContainer) frameContainer.style.aspectRatio = `${result.width} / ${result.height}`;
     if (smile) smile.style.display = 'none';
+    state.previewPayloadSignature = compositePayloadSignature(payload);
+    syncConfirmFrameButton();
     renderSlotOverlay();
+    return true;
   } catch (error) {
     console.warn('Frame preview render failed:', error);
+    syncConfirmFrameButton();
+    return false;
   }
 }
 
@@ -430,13 +504,13 @@ async function startCamera() {
   stopCamera();
   const camera = state.config.camera;
   const video = { width: { ideal: camera.width }, height: { ideal: camera.height } };
-  if (camera.deviceId) video.deviceId = { ideal: camera.deviceId }; else if (camera.facingMode) video.facingMode = camera.facingMode;
+  if (camera.deviceId) video.deviceId = { exact: camera.deviceId }; else if (camera.facingMode) video.facingMode = camera.facingMode;
   if (state.config.camera.mode === 'dslr') {
     $('#cameraVideo').style.display = 'none';
-    $('#cameraModeLabel').textContent = 'DSLR / CANON BRIDGE';
+    $('#cameraModeLabel').textContent = 'MÁY ẢNH CHUYÊN DỤNG';
     if (state.config.timelapse?.enabled) {
       try { state.stream = await navigator.mediaDevices.getUserMedia({ video, audio: false }); }
-      catch { updateTimelapseStatus('error', 'Không có webcam quay timelapse'); }
+      catch { updateTimelapseStatus('error', 'Chưa bật được camera quay hậu trường'); }
     }
     return;
   }
@@ -444,14 +518,114 @@ async function startCamera() {
   try {
     state.stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
   } catch (error) {
-    console.warn('Constrained camera request failed, attempting default video stream:', error);
-    state.stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    console.warn('Constrained camera request failed, attempting fallback stream:', error);
+    const fallback = camera.facingMode ? { facingMode: camera.facingMode } : true;
+    state.stream = await navigator.mediaDevices.getUserMedia({ video: fallback, audio: false });
   }
   const element = $('#cameraVideo');
   element.srcObject = state.stream;
   element.classList.toggle('mirror', camera.mirrorPreview);
+  element.style.filter = 'none';
   await element.play();
-  $('#cameraModeLabel').textContent = 'WEBCAM';
+  $('#cameraModeLabel').textContent = 'CAMERA ĐANG BẬT';
+}
+
+/** Toggle mirror preview from the capture screen button. */
+async function toggleMirrorPreview() {
+  const current = Boolean(state.config?.camera?.mirrorPreview);
+  const next = !current;
+  const patch = {};
+  setAtPath(patch, 'camera.mirrorPreview', next);
+  state.config = await window.photobooth.config.save(patch);
+  // Live update video element
+  const video = $('#cameraVideo');
+  if (video) video.classList.toggle('mirror', next);
+  // Also sync the settings checkbox if open
+  const checkbox = document.querySelector('[name="camera.mirrorPreview"]');
+  if (checkbox) checkbox.checked = next;
+  syncMirrorToggleButton();
+}
+
+/** Update mirror toggle button visual state. */
+function syncMirrorToggleButton() {
+  const btn = $('#mirrorToggleButton');
+  if (!btn) return;
+  const mirrored = Boolean(state.config?.camera?.mirrorPreview);
+  btn.classList.toggle('active', mirrored);
+  btn.setAttribute('aria-pressed', String(mirrored));
+  btn.title = mirrored ? 'Tắt lật gương' : 'Bật lật gương';
+}
+
+function syncLutControls() {
+  const selected = availableLut();
+  $('#lutName').textContent = selected.label;
+  $$('.lut-option').forEach((button) => {
+    button.classList.toggle('active', button.dataset.lutId === selected.id);
+    button.setAttribute('aria-pressed', String(button.dataset.lutId === selected.id));
+    button.disabled = state.busy;
+  });
+  if ($('#importLutButton')) $('#importLutButton').disabled = state.busy;
+}
+
+function selectLut(lutId) {
+  if (state.busy) return;
+  state.lutId = normalizeAvailableLutId(lutId);
+  syncLutControls();
+  renderPhotoGallery();
+  refreshShotLutPreviews();
+  scheduleFramePreview(0);
+  scheduleDraftSave('frame');
+}
+
+function renderLutOptions() {
+  const picker = $('#lutOptions');
+  picker.replaceChildren();
+  for (const lut of state.luts) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'lut-option';
+    button.classList.toggle('custom', Boolean(lut.custom));
+    button.dataset.lutId = lut.id;
+    button.title = lut.description;
+    button.setAttribute('aria-label', `${lut.label} · ${lut.description}`);
+    const swatch = document.createElement('span');
+    swatch.className = 'lut-swatch';
+    swatch.setAttribute('aria-hidden', 'true');
+    swatch.style.setProperty('--lut-swatch', lut.swatch);
+    const label = document.createElement('strong');
+    label.textContent = lut.label;
+    button.append(swatch, label);
+    button.onclick = () => selectLut(lut.id);
+    picker.append(button);
+  }
+  syncLutControls();
+}
+
+async function importCubeLuts() {
+  if (state.busy) return;
+  state.busy = true;
+  syncLutControls();
+  try {
+    const result = await window.photobooth.luts.importCube();
+    if (result.cancelled) return;
+    state.luts = result.luts;
+    renderLutOptions();
+    if (result.imported.length) {
+      state.lutId = normalizeAvailableLutId(result.imported[0].id);
+      renderPhotoGallery();
+      refreshShotLutPreviews();
+      scheduleFramePreview(0);
+      scheduleDraftSave('frame');
+      const suffix = result.imported.length > 1 ? ` và ${result.imported.length - 1} LUT khác` : '';
+      toast(`Đã thêm ${result.imported[0].label}${suffix} vào bộ sưu tập ✨`);
+    }
+  } catch (error) {
+    toast(`Oops, chưa thêm được gam màu: ${error.message}`);
+    console.error(error);
+  } finally {
+    state.busy = false;
+    syncLutControls();
+  }
 }
 
 function stopCamera() {
@@ -462,20 +636,20 @@ function stopCamera() {
 function updateTimelapseStatus(status, message) {
   const element = $('#timelapseStatus');
   element.className = `timelapse-status${status === 'hidden' ? '' : ` show ${status}`}`;
-  element.querySelector('span').textContent = message || 'Timelapse 2×';
+  element.querySelector('span').textContent = message || 'Một chút hậu trường nè~';
 }
 
 function startTimelapseRecording() {
   if (!state.config.timelapse?.enabled) return updateTimelapseStatus('hidden');
   if (!state.stream || typeof MediaRecorder === 'undefined') {
-    return updateTimelapseStatus('error', 'Không thể quay timelapse');
+    return updateTimelapseStatus('error', 'Chưa bật được camera quay hậu trường');
   }
   const mimeType = [
     'video/webm;codecs=vp9',
     'video/webm;codecs=vp8',
     'video/webm'
   ].find((value) => MediaRecorder.isTypeSupported(value));
-  if (!mimeType) return updateTimelapseStatus('error', 'Trình quay video không hỗ trợ');
+  if (!mimeType) return updateTimelapseStatus('error', 'Máy chưa hỗ trợ quay hậu trường nè');
   const chunks = [];
   const recorder = new MediaRecorder(state.stream, {
     mimeType,
@@ -485,12 +659,12 @@ function startTimelapseRecording() {
   let rejectStopped;
   const stopped = new Promise((resolve, reject) => { resolveStopped = resolve; rejectStopped = reject; });
   recorder.ondataavailable = (event) => { if (event.data?.size) chunks.push(event.data); };
-  recorder.onerror = (event) => rejectStopped(event.error || new Error('Không thể ghi timelapse'));
+  recorder.onerror = (event) => rejectStopped(event.error || new Error('Chưa ghi được đoạn phim hậu trường'));
   recorder.onstop = () => resolveStopped(new Blob(chunks, { type: recorder.mimeType || mimeType }));
   state.timelapseSavePromise = null;
   state.timelapseRecording = { recorder, stopped, stopTask: null };
   recorder.start(1000);
-  updateTimelapseStatus('recording', `Đang quay timelapse ${state.config.timelapse.speed || 2}×`);
+  updateTimelapseStatus('recording', 'Đang quay hậu trường nè~');
 }
 
 async function stopTimelapseRecording({ save = true } = {}) {
@@ -505,18 +679,18 @@ async function stopTimelapseRecording({ save = true } = {}) {
       updateTimelapseStatus('hidden');
       return { savePromise: null };
     }
-    updateTimelapseStatus('processing', 'Đang tạo timelapse 2×');
+    updateTimelapseStatus('processing', 'Đang xử lý video hậu trường nè~');
     const sessionId = state.session.id;
     const savePromise = (async () => {
       const bytes = new Uint8Array(await blob.arrayBuffer());
       return window.photobooth.timelapse.encode({ sessionId, bytes });
     })().then((result) => {
-      updateTimelapseStatus('ready', 'Đã lưu timelapse 2×');
+      updateTimelapseStatus('ready', 'Video hậu trường đã xong rồi nè ✨');
       return result;
     }).catch((error) => {
       console.error(error);
-      updateTimelapseStatus('error', 'Lỗi lưu timelapse');
-      toast(`Không lưu được timelapse: ${error.message}`);
+      updateTimelapseStatus('error', 'Chưa lưu được video hậu trường');
+      toast(`Oops, chưa lưu được video hậu trường: ${error.message}`);
       return null;
     });
     state.timelapseSavePromise = savePromise;
@@ -554,21 +728,25 @@ async function captureStill() {
     return { artifactId: result.item.id, kind: result.item.kind, dataUrl: result.dataUrl };
   }
   const video = $('#cameraVideo');
+  const width = video.videoWidth || state.config.camera.width;
+  const height = video.videoHeight || state.config.camera.height;
+  console.info(`Webcam negotiated capture: ${width}x${height}`);
+
   const canvas = $('#cameraCanvas');
-  canvas.width = video.videoWidth || state.config.camera.width;
-  canvas.height = video.videoHeight || state.config.camera.height;
-  console.info(`Webcam negotiated capture: ${canvas.width}x${canvas.height}`);
+  canvas.width = width;
+  canvas.height = height;
   const context = canvas.getContext('2d');
   context.setTransform(1, 0, 0, 1, 0, 0);
   context.clearRect(0, 0, canvas.width, canvas.height);
-  if (state.config.camera.mirrorOutput) {
+  if (state.config.camera.mirrorPreview) {
     context.translate(canvas.width, 0);
     context.scale(-1, 1);
   }
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
-  const dataUrl = canvas.toDataURL('image/jpeg', .94);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.94);
+
   const item = await saveBlob(dataUrlToBlob(dataUrl), 'photo-original', 'jpg');
-  return { artifactId: item.id, kind: item.kind, dataUrl, width: canvas.width, height: canvas.height };
+  return { artifactId: item.id, kind: item.kind, dataUrl, width, height };
 }
 
 async function imageFromUrl(url) {
@@ -650,8 +828,8 @@ async function composePhotoStrip(shots, frame = state.selectedFrame, qrDataUrl =
     const label = { x: 58, y: 1625, maxWidth: qr.x - 90, color: '#fff', ...(frame?.label || {}) };
     context.fillStyle = label.color;
     context.font = '700 32px Segoe UI'; context.fillText(state.config.branding.name, label.x, label.y, label.maxWidth);
-    context.font = '400 19px Segoe UI'; context.fillText(new Date().toLocaleString('vi-VN'), label.x, label.y + 48, label.maxWidth);
-    context.font = '600 15px Segoe UI'; context.fillText('QUÉT QR ĐỂ NHẬN ẢNH', label.x, label.y + 92, label.maxWidth);
+    context.font = '400 19px Nunito'; context.fillText(new Date().toLocaleString('vi-VN'), label.x, label.y + 48, label.maxWidth);
+    context.font = '600 15px Segoe UI'; context.fillText('QUÉT QR ĐỂ XEM ALBUM', label.x, label.y + 92, label.maxWidth);
   }
   const quality = Math.max(.01, Math.min(1, (Number(composite.jpegQuality) || 95) / 100));
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
@@ -677,18 +855,35 @@ async function ensureQrDataUrl() {
 async function finalizePhoto() {
   if (state.busy || !validateSlotAssignments(state.slotAssignments, selectedArtifactIds(), state.selectionTargetCount)) return;
   state.busy = true;
+  syncLutControls();
   const button = $('#confirmFrame');
-  button.disabled = true; button.firstChild.textContent = 'Đang ghép ảnh… ';
+  button.disabled = true; button.firstChild.textContent = 'Đang gói ghém bộ ảnh… ';
   try {
     await ensureQrDataUrl();
     await ensureFrameSlots(state.selectedFrame);
-    const result = await window.photobooth.composite.create(compositePayload());
+    const payload = compositePayload();
+    const signature = compositePayloadSignature(payload);
+    if (state.previewPayloadSignature !== signature) {
+      clearTimeout(state.previewTimer);
+      const version = ++state.previewVersion;
+      await updateFramePreview(version, payload, state.selectedFrame);
+    }
+    if (state.previewPayloadSignature !== signature) throw new Error('Bản xem trước chưa kịp hoàn thiện, bạn thử lại một lần nữa nhé');
+    button.firstChild.textContent = 'Đang tô màu từng khoảnh khắc… ';
+    await window.photobooth.luts.prepareSession({
+      sessionId: state.session.id,
+      artifactIds: state.shots.map((shot) => shot.artifactId),
+      lutId: state.lutId
+    });
+    button.firstChild.textContent = 'Đang ghép tấm ảnh thành phẩm… ';
+    const result = await window.photobooth.composite.create(payload);
     const blob = bytesToBlob(result);
     state.resultBlob = blob;
     state.resultProfile = result.profile || '4x6-portrait';
+    state.resultArtifactId = result.item?.id || '';
     state.resultDataUrl = URL.createObjectURL(blob);
     if (state.timelapseSavePromise) {
-      button.firstChild.textContent = 'Đang hoàn thiện timelapse… ';
+      button.firstChild.textContent = 'Đang gói đoạn phim hậu trường… ';
       await state.timelapseSavePromise;
     }
     const finished = await window.photobooth.session.finish(state.session.id);
@@ -699,8 +894,9 @@ async function finalizePhoto() {
     toast(error.message); console.error(error);
   } finally {
     state.busy = false;
-    button.disabled = !validateSlotAssignments(state.slotAssignments, selectedArtifactIds(), state.selectionTargetCount);
-    button.firstChild.textContent = 'Chốt ảnh này ';
+    syncLutControls();
+    syncConfirmFrameButton();
+    button.firstChild.textContent = 'Hoàn thiện bộ ảnh ';
   }
 }
 
@@ -710,14 +906,14 @@ function addCaptureThumbnail(dataUrl) {
   img.className = 'capture-thumb';
   img.src = dataUrl;
   img.alt = 'Ảnh vừa chụp';
-  img.title = 'Nhấn để xem phóng to full screen';
+  img.title = 'Chạm để ngắm tấm ảnh thật rõ';
   img.onclick = () => openZoom(dataUrl);
   container.append(img);
   img.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 async function captureAndStoreShot(index, count, generation = state.captureGeneration) {
-  $('#captureMessage').textContent = `Tạo dáng cho ảnh ${index + 1} / ${count}`;
+  $('#captureMessage').textContent = `Ảnh ${index + 1}/${count} · cười thật tươi nhé~`;
   await countdown(state.config.camera.countdownSeconds, generation);
   if (generation !== state.captureGeneration) throw new Error('Đã hủy thao tác chụp');
   const shot = await captureStill();
@@ -735,7 +931,10 @@ async function runPhotoAuto(generation = state.captureGeneration) {
   for (let index = state.shots.length; index < count; index += 1) {
     if (generation !== state.captureGeneration) throw new Error('Đã hủy thao tác chụp');
     await captureAndStoreShot(index, count, generation);
-    await sleep(state.config.camera.intervalSeconds * 1000);
+    // Don't sleep after the last shot
+    if (index < count - 1) {
+      await sleep(state.config.camera.intervalSeconds * 1000);
+    }
   }
   if (generation === state.captureGeneration) await finishCapturePhase();
 }
@@ -747,15 +946,22 @@ function candidateCount() {
 async function finishCapturePhase() {
   await stopTimelapseRecording({ save: true }).catch((error) => {
     console.error(error);
-    updateTimelapseStatus('error', 'Lỗi dừng timelapse');
+    updateTimelapseStatus('error', 'Lỗi dừng quay hậu trường nè');
   });
   stopCamera();
   await ensureQrDataUrl();
   state.selectionTargetCount = Math.min(candidateCount(), state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4);
   state.selectedShotIndexes = new Set(state.shots.map((_shot, index) => index));
   state.slotAssignments = [];
-  openFrameSelection();
+  openSelectionScreen();
   scheduleDraftSave();
+}
+
+function openSelectionScreen() {
+  $('#selectionTarget').value = String(state.selectionTargetCount);
+  renderShotSelection();
+  showScreen('selectionScreen');
+  scheduleDraftSave('selection');
 }
 
 function renderShotSelection() {
@@ -777,19 +983,19 @@ function renderShotSelection() {
     select.onclick = () => {
       if (state.selectedShotIndexes.has(index)) state.selectedShotIndexes.delete(index);
       else if (state.selectedShotIndexes.size < state.selectionTargetCount) state.selectedShotIndexes.add(index);
-      else return toast(`Chỉ chọn đúng ${state.selectionTargetCount} ảnh`);
+      else return toast(`Chỉ được giữ ${state.selectionTargetCount} tấm thôi nha~`);
       state.slotAssignments = [];
       renderShotSelection();
       scheduleDraftSave();
     };
     const zoomBtn = document.createElement('button');
-    zoomBtn.className = 'shot-zoom-btn'; zoomBtn.type = 'button'; zoomBtn.title = 'Xem ảnh lớn'; zoomBtn.textContent = '⤢';
+    zoomBtn.className = 'shot-zoom-btn'; zoomBtn.type = 'button'; zoomBtn.title = 'Ngắm tấm ảnh thật rõ'; zoomBtn.textContent = '⤢';
     zoomBtn.onclick = () => openZoom(shot.dataUrl);
     card.append(select, zoomBtn);
     container.append(card);
   });
   const complete = state.selectedShotIndexes.size === state.selectionTargetCount;
-  $('#selectedCount').textContent = `Đã chọn ${state.selectedShotIndexes.size}/${state.selectionTargetCount} ảnh`;
+  $('#selectedCount').textContent = `Đã chọn ${state.selectedShotIndexes.size}/${state.selectionTargetCount} tấm`;
   $('#confirmShots').disabled = !complete;
 }
 
@@ -803,12 +1009,14 @@ function changeSelectionTarget(event) {
 }
 
 async function openFrameSelection() {
-  state.selectedShotIndexes = new Set(state.shots.map((_shot, index) => index));
   await ensureQrDataUrl();
-  $('#frameScreen .section-heading h2').textContent = `Chọn khung và sắp xếp ảnh (${state.shots.length} ảnh đã chụp)`;
+  const count = state.selectedShotIndexes.size || state.selectionTargetCount;
+  $('#frameScreen .section-heading h2').textContent = `Chọn chiếc khung dành cho ${count} khoảnh khắc`;
   ensureAssignments();
   showScreen('frameScreen');
+  syncLutControls();
   renderFrames();
+  refreshShotLutPreviews();
   scheduleDraftSave('frame');
 }
 
@@ -819,7 +1027,9 @@ function revokeRecoveryUrls() {
 
 function clearResultState() {
   if (state.resultDataUrl?.startsWith('blob:')) URL.revokeObjectURL(state.resultDataUrl);
+  if (state.framePreviewUrl) URL.revokeObjectURL(state.framePreviewUrl);
   state.resultDataUrl = '';
+  state.framePreviewUrl = '';
   state.resultBlob = null;
   state.resultProfile = '4x6-portrait';
   state.resultArtifactId = '';
@@ -838,6 +1048,7 @@ function draftValue(step = $('#frameScreen').classList.contains('active') ? 'fra
     frameId: state.selectedFrame?.id || '',
     slotAssignments: state.slotAssignments,
     transforms: state.photoTransforms,
+    lutId: state.lutId,
     step
   };
 }
@@ -865,14 +1076,14 @@ async function openSessionsScreen() {
 
 async function renderSessionsList() {
   const grid = $('#sessionsList');
-  grid.innerHTML = '<div class="session-empty">Đang tải…</div>';
+  grid.innerHTML = '<div class="session-empty">Đang tìm lại ảnh nè…</div>';
   try {
     const allSessions = await window.photobooth.session.listAll();
     const resultSessions = await window.photobooth.session.listResults().catch(() => []);
     const resultIds = new Set(resultSessions.map((s) => s.id));
     grid.replaceChildren();
     if (!allSessions.length) {
-      grid.innerHTML = '<div class="session-empty">Không có phiên nào được lưu local.</div>';
+      grid.innerHTML = '<div class="session-empty">Chưa có lần chụp nào trên máy nè~</div>';
       return;
     }
     for (const session of allSessions) {
@@ -887,7 +1098,7 @@ async function renderSessionsList() {
       photoGrid.className = 'session-folder-photos';
       for (let i = 0; i < 4; i++) { const ph = document.createElement('div'); ph.className = 'photo-ph'; photoGrid.append(ph); }
       const info = document.createElement('div'); info.className = 'session-folder-info';
-      info.innerHTML = `<strong>${date}</strong><small>${count} ảnh${hasResult ? ' · đã in' : isRecoverable ? ' · chưa hoàn tất' : ''}</small>`;
+      info.innerHTML = `<strong>${date}</strong><small>${count} ảnh${hasResult ? ' · đã hoàn thành' : isRecoverable ? ' · chưa xong' : ''}</small>`;
       folder.append(photoGrid, info);
       folder.onclick = () => {
         if (hasResult) restoreResultSession(session.id);
@@ -909,7 +1120,7 @@ async function renderSessionsList() {
       }
     }
   } catch (error) {
-    grid.innerHTML = `<div class="session-empty">Lỗi: ${error.message}</div>`;
+    grid.innerHTML = `<div class="session-empty">Oops, chưa tải được danh sách: ${error.message}</div>`;
   }
 }
 
@@ -920,8 +1131,9 @@ async function reopenSession(sessionId) {
   state.navigatedFromSessions = true;
   try {
     revokeSessionThumbUrls();
+    clearLutPreviewUrls();
     const originals = await window.photobooth.session.readOriginalsAny({ sessionId });
-    if (!originals.length) { toast('Không tìm thấy ảnh trong phiên này'); return; }
+    if (!originals.length) { toast('Chưa tìm thấy ảnh nào để xem lại nè'); return; }
     revokeRecoveryUrls();
     const newSession = await window.photobooth.session.create('photo');
     state.session = newSession;
@@ -939,9 +1151,9 @@ async function reopenSession(sessionId) {
     state.selectionTargetCount = state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4;
     state.selectedShotIndexes = new Set(state.shots.map((_, i) => i));
     state.slotAssignments = [];
-    openFrameSelection();
+    openSelectionScreen();
   } catch (error) {
-    toast(`Không mở được phiên: ${error.message}`); console.error(error);
+    toast(`Oops, chưa mở lại được ảnh: ${error.message}`); console.error(error);
   } finally {
     state.busy = false;
   }
@@ -960,7 +1172,7 @@ async function refreshRecoverableSessions() {
   const panel = $('#recoveryPanel');
   const list = $('#recoveryList');
   panel.hidden = entries.length === 0;
-  $('#recoverySummary').textContent = entries.length ? `${entries.length} phiên chưa hoàn tất` : '';
+  $('#recoverySummary').textContent = entries.length ? `${entries.length} lần chụp đang chờ bạn nè~` : '';
   list.replaceChildren();
   entries.forEach(({ type, sessionValue }) => {
     const row = document.createElement('div'); row.className = 'recovery-item';
@@ -968,16 +1180,16 @@ async function refreshRecoverableSessions() {
     const title = document.createElement('strong'); title.textContent = new Date(sessionValue.createdAt).toLocaleString('vi-VN');
     const detail = document.createElement('small');
     detail.textContent = type === 'result'
-      ? 'Kết quả đã ghép · sẵn sàng mở lại và in'
-      : `${sessionValue.items.filter((item) => ['photo-original', 'dslr-original'].includes(item.kind)).length} ảnh local`;
+      ? 'Ảnh đã xong · xem lại hoặc in thêm nhé~'
+      : `${sessionValue.items.filter((item) => ['photo-original', 'dslr-original'].includes(item.kind)).length} khoảnh khắc đang chờ trên máy`;
     text.append(title, detail);
     const actions = document.createElement('div');
     const resume = document.createElement('button'); resume.type = 'button'; resume.className = 'small-button';
-    resume.textContent = type === 'result' ? 'Mở kết quả' : 'Khôi phục';
+    resume.textContent = type === 'result' ? 'Xem lại ảnh' : 'Chụp tiếp nha~';
     resume.onclick = () => type === 'result' ? restoreResultSession(sessionValue.id) : resumeSession(sessionValue.id);
     actions.append(resume);
     if (type === 'capture') {
-      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-button'; remove.textContent = 'Xóa';
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-button'; remove.textContent = 'Xoá lần chụp này';
       remove.onclick = async () => { await window.photobooth.session.cancel(sessionValue.id); await refreshRecoverableSessions(); await refreshStats(); };
       actions.append(remove);
     }
@@ -991,6 +1203,7 @@ async function resumeSession(sessionId) {
   state.navigatedFromSessions = true;
   try {
     revokeRecoveryUrls();
+    clearLutPreviewUrls();
     const sessionValue = await window.photobooth.session.resume(sessionId);
     const originals = await window.photobooth.session.readOriginals({ sessionId, artifactIds: sessionValue.items.filter((item) => ['photo-original', 'dslr-original'].includes(item.kind)).map((item) => item.id) });
     state.session = sessionValue;
@@ -1003,8 +1216,15 @@ async function resumeSession(sessionId) {
     await ensureQrDataUrl();
     const draft = sessionValue.draft || {};
     state.selectionTargetCount = normalizeTargetCount(draft.targetCount, state.shots.length >= 8 ? 8 : state.shots.length >= 6 ? 6 : 4);
-    state.selectedShotIndexes = new Set(state.shots.map((_, index) => index));
+    // Restore selected shots from draft if available, otherwise select all
+    if (Array.isArray(draft.selectedArtifactIds) && draft.selectedArtifactIds.length) {
+      const artifactIdToIndex = new Map(state.shots.map((shot, index) => [shot.artifactId, index]));
+      state.selectedShotIndexes = new Set(draft.selectedArtifactIds.map((id) => artifactIdToIndex.get(id)).filter((i) => i !== undefined));
+    } else {
+      state.selectedShotIndexes = new Set(state.shots.map((_, index) => index));
+    }
     state.photoTransforms = structuredClone(draft.transforms || {});
+    state.lutId = normalizeAvailableLutId(draft.lutId);
     state.shots.forEach((shot) => { state.photoTransforms[shot.artifactId] ??= { panX: 50, panY: 50, zoom: 1, rotation: 0 }; });
     state.slotAssignments = Array.isArray(draft.slotAssignments) ? draft.slotAssignments.slice(0, state.selectionTargetCount) : [];
     state.selectedFrame = state.frames.find((frame) => frame.id === draft.frameId) || state.selectedFrame;
@@ -1014,21 +1234,23 @@ async function resumeSession(sessionId) {
       state.config.camera.candidateCount = count;
       showScreen('captureScreen');
       updateTimelapseStatus('hidden');
-      $('#captureMessage').textContent = `Đã khôi phục ${state.shots.length}/${count} ảnh · tiếp tục chụp ảnh còn thiếu`;
+      $('#captureMessage').textContent = `Đã tìm lại ${state.shots.length}/${count} tấm · chụp tiếp nhé~`;
       $('#shotProgress').innerHTML = Array.from({ length: count }, (_value, index) => `<i class="${index < state.shots.length ? 'done' : ''}"></i>`).join('');
       $('#captureThumbnails').replaceChildren();
       state.shots.forEach((shot) => addCaptureThumbnail(shot.dataUrl));
       if (state.shots.length >= 4) $('#captureNextButton').hidden = false;
       await startCamera();
-      startTimelapseRecording();
-    } else {
+    } else if (draft.step === 'frame' && state.slotAssignments.length) {
       openFrameSelection();
+    } else {
+      openSelectionScreen();
     }
   } catch (error) {
-    toast(`Không khôi phục được phiên: ${error.message}`);
+    toast(`Oops, chưa tiếp tục được: ${error.message}`);
     console.error(error);
   } finally {
     state.busy = false;
+    syncLutControls();
     await refreshRecoverableSessions();
   }
 }
@@ -1043,6 +1265,7 @@ async function restoreResultSession(sessionId) {
     const blob = bytesToBlob(result);
     state.session = result.session;
     state.sessionFinished = true;
+    state.lutId = normalizeAvailableLutId(result.session.publishedLutId);
     state.resultBlob = blob;
     state.resultDataUrl = URL.createObjectURL(blob);
     state.resultProfile = result.profile || '4x6-portrait';
@@ -1052,7 +1275,7 @@ async function restoreResultSession(sessionId) {
     showResult();
     await showQr(result.galleryUrl);
   } catch (error) {
-    toast(`Không mở được kết quả: ${error.message}`);
+    toast(`Oops, chưa mở lại được ảnh: ${error.message}`);
     console.error(error);
   } finally {
     state.busy = false;
@@ -1066,6 +1289,8 @@ async function beginCapture() {
   const generation = state.captureGeneration;
   try {
     if (!state.session) state.session = await window.photobooth.session.create('photo');
+    // Start timelapse on first capture press to avoid recording idle time
+    if (!state.timelapseRecording) startTimelapseRecording();
     const count = candidateCount();
     if (state.config.camera.captureWorkflow === 'auto') {
       await runPhotoAuto(generation);
@@ -1073,9 +1298,9 @@ async function beginCapture() {
       const index = state.shots.length;
       await captureAndStoreShot(index, count, generation);
       if (state.shots.length >= MAX_SHOTS) {
-        $('#captureMessage').textContent = `Đã chụp đủ ${MAX_SHOTS} ảnh · nhấn "Tiếp theo" để tiếp tục`;
+        $('#captureMessage').textContent = `Đã chụp đủ ${MAX_SHOTS} tấm · cùng xem lại nào~`;
       } else {
-        $('#captureMessage').textContent = `Đã chụp ${state.shots.length} ảnh · nhấn nút để chụp tiếp`;
+        $('#captureMessage').textContent = `Đã chụp ${state.shots.length} tấm · sẵn sàng cho tấm tiếp theo nhé~`;
       }
     }
   } catch (error) {
@@ -1084,6 +1309,7 @@ async function beginCapture() {
   } finally {
     state.busy = false;
     $('#shutterButton').disabled = state.shots.length >= MAX_SHOTS;
+    syncLutControls();
     $('#countdown').textContent = '';
   }
 }
@@ -1098,8 +1324,8 @@ function showResult() {
   state.printCopies = 1;
   $('#printCopiesDisplay').textContent = '1 bản';
   $('#printButton').style.display = 'inline-block';
-  $('#finishButton').textContent = state.navigatedFromSessions ? 'Về danh sách session →' : 'Hoàn tất về trang chủ';
-  $('#resultStatus').textContent = state.config.drive.enabled ? 'Gallery đã sẵn sàng · ảnh đang đồng bộ lên Google Drive…' : 'Gallery local đã sẵn sàng';
+  $('#finishButton').textContent = state.navigatedFromSessions ? 'Về danh sách chụp trước →' : 'Về trang chủ';
+  $('#resultStatus').textContent = state.config.cloudflare?.enabled ? 'Album đang được gói ghém · ảnh đang lưu an toàn…' : 'Album trên máy đã sẵn sàng rồi nè~';
   refreshStats();
 }
 
@@ -1110,7 +1336,7 @@ async function changeFrameFromResult() {
     state.busy = true;
     try {
       const originals = await window.photobooth.session.readOriginalsAny({ sessionId: state.session.id });
-      if (!originals || !originals.length) { toast('Không tìm thấy ảnh gốc để đổi khung'); return; }
+      if (!originals || !originals.length) { toast('Chưa tìm thấy ảnh nguyên bản để thử khung khác nè'); return; }
       revokeRecoveryUrls();
       state.shots = [];
       state.photoTransforms = {};
@@ -1124,7 +1350,7 @@ async function changeFrameFromResult() {
       state.selectedShotIndexes = new Set(state.shots.map((_, i) => i));
       state.slotAssignments = [];
     } catch (error) {
-      toast(`Lỗi đọc ảnh gốc: ${error.message}`);
+      toast(`Oops, chưa mở được ảnh nguyên bản: ${error.message}`);
       console.error(error);
       return;
     } finally {
@@ -1145,13 +1371,13 @@ function applyZoomTransform() {
   }
 }
 
-function openZoom(src) {
+function openZoom(src, filter = 'none') {
   state.zoomScale = 1;
   state.zoomTranslateX = 0;
   state.zoomTranslateY = 0;
   state.isZoomDragging = false;
   const img = $('#zoomImage');
-  if (img) img.src = src;
+  if (img) { img.src = src; img.style.filter = filter; }
   applyZoomTransform();
   $('#zoomModal')?.classList.add('open');
 }
@@ -1177,6 +1403,7 @@ let cropState = {
   panY: 50,
   zoom: 1,
   rotation: 0,
+  mirrored: false,
   isDragging: false,
   dragStartX: 0,
   dragStartY: 0,
@@ -1202,6 +1429,7 @@ function openCropModal(artifactId) {
     panY: existing.panY,
     zoom: existing.zoom,
     rotation: existing.rotation,
+    mirrored: existing.mirrored === true,
     isDragging: false,
     dragStartX: 0,
     dragStartY: 0,
@@ -1209,10 +1437,11 @@ function openCropModal(artifactId) {
     initialPanY: existing.panY
   };
   
-  $('#cropModalSlotTitle').textContent = `Chỉnh vị trí Ô ${slotIndex + 1}`;
+  $('#cropModalSlotTitle').textContent = `Căn lại ảnh ô ${slotIndex + 1} nha~`;
   const img = $('#cropTargetImage');
   img.src = shot.dataUrl;
   $('#cropModalZoom').value = cropState.zoom;
+  $('#cropMirrorBtn').setAttribute('aria-pressed', String(cropState.mirrored));
   
   const dialog = $('#cropModal');
   if (dialog) {
@@ -1232,8 +1461,9 @@ function updateCropModalLayout() {
   const container = $('#cropViewportContainer');
   const cropBox = $('#cropBox');
   const stage = $('#cropImageStage');
+  const mirrorLayer = $('#cropMirrorLayer');
   const img = $('#cropTargetImage');
-  if (!container || !cropBox || !stage || !img) return;
+  if (!container || !cropBox || !stage || !mirrorLayer || !img) return;
 
   const containerW = container.clientWidth || 500;
   const containerH = container.clientHeight || 380;
@@ -1288,6 +1518,7 @@ function updateCropModalLayout() {
   stage.style.width = `${Math.round(stageW)}px`;
   stage.style.height = `${Math.round(stageH)}px`;
   stage.style.transform = `translate(${stageLeft}px, ${stageTop}px)`;
+  mirrorLayer.style.transform = cropState.mirrored ? 'scaleX(-1)' : 'none';
 
   const rot = cropState.rotation % 360;
   img.style.width = `${Math.round(naturalW * scaleBox)}px`;
@@ -1304,8 +1535,9 @@ function updateCropModalLayout() {
 
   const miniWrap = $('#cropMiniPreviewWrap');
   const miniStage = $('#cropMiniStage');
+  const miniMirrorLayer = $('#cropMiniMirrorLayer');
   const miniImg = $('#cropMiniPreviewImg');
-  if (miniWrap && miniStage && miniImg) {
+  if (miniWrap && miniStage && miniMirrorLayer && miniImg) {
     miniImg.src = cropState.dataUrl;
     const miniWrapW = miniWrap.clientWidth || 140;
     const miniWrapH = miniWrap.clientHeight || 140;
@@ -1319,6 +1551,7 @@ function updateCropModalLayout() {
     miniStage.style.width = `${Math.round(SW * scaleMini)}px`;
     miniStage.style.height = `${Math.round(SH * scaleMini)}px`;
     miniStage.style.transform = `translate(${-left * scaleMini}px, ${-top * scaleMini}px)`;
+    miniMirrorLayer.style.transform = cropState.mirrored ? 'scaleX(-1)' : 'none';
     miniImg.style.width = `${Math.round(naturalW * scaleMini)}px`;
     miniImg.style.height = `${Math.round(naturalH * scaleMini)}px`;
     if (rot === 90) {
@@ -1338,7 +1571,7 @@ async function showQr(link) {
   const canvas = document.createElement('canvas'); card.append(canvas);
   await QRCode.toCanvas(canvas, link, { width: 180, margin: 1, color: { dark: '#322b2d', light: '#ffffff' } });
   const label = document.createElement('small');
-  label.textContent = `Quét để mở gallery · ${new URL(link).host}`;
+  label.textContent = `Quét để xem album · ${new URL(link).host} nha~`;
   label.title = link;
   card.append(label);
 }
@@ -1350,6 +1583,7 @@ async function openCapture() {
   state.captureGeneration += 1;
   if (state.sessionFinished) await acknowledgeCurrentResult().catch(() => { });
   clearResultState();
+  clearLutPreviewUrls();
   state.captureGeneration += 1;
   clearTimeout(state.draftTimer);
   const previousSession = state.session;
@@ -1359,23 +1593,22 @@ async function openCapture() {
   stopCamera();
   if (previousSession && !previousFinished) await window.photobooth.session.cancel(previousSession.id).catch(() => { });
   state.session = null; state.sessionFinished = false; revokeRecoveryUrls(); state.shots = [];
-  state.photoTransforms = {}; state.activeTransformId = ''; state.selectedShotIndexes = new Set(); state.selectionTargetCount = candidateCount(); state.slotAssignments = []; state.activeSlotIndex = -1; state.pendingArtifactId = ''; state.galleryUrl = ''; state.qrDataUrl = ''; state.timelapseSavePromise = null;
+  state.photoTransforms = {}; state.activeTransformId = ''; state.selectedShotIndexes = new Set(); state.selectionTargetCount = candidateCount(); state.slotAssignments = []; state.activeSlotIndex = -1; state.pendingArtifactId = ''; state.galleryUrl = ''; state.qrDataUrl = ''; state.timelapseSavePromise = null; state.lutId = 'natural';
   const count = candidateCount();
   showScreen('captureScreen');
   updateTimelapseStatus('hidden');
   $('#captureThumbnails').replaceChildren();
   $('#captureNextButton').hidden = true;
   $('#shutterButton').disabled = false;
-  $('#captureMessage').textContent = state.config.camera.captureWorkflow === 'manual' ? 'Nhấn nút để chụp ảnh 1' : 'Nhấn nút để bắt đầu chụp tự động';
+  $('#captureMessage').textContent = state.config.camera.captureWorkflow === 'manual' ? 'Chạm nút tròn khi bạn sẵn sàng nhé~' : 'Chạm nút tròn để bắt đầu chụp nè~';
   $('#shotProgress').innerHTML = Array.from({ length: count }, () => '<i></i>').join('');
   $('#liveFrame').removeAttribute('src'); $('#liveFrame').style.display = 'none';
   try {
     await startCamera();
     state.session = await window.photobooth.session.create('photo');
-    startTimelapseRecording();
   } catch (error) {
     stopCamera();
-    toast(`Không mở được camera: ${error.message}`);
+    toast(`Máy ảnh chưa sẵn sàng nè: ${error.message}`);
   }
 }
 
@@ -1391,6 +1624,7 @@ async function goHome() {
   updateTimelapseStatus('hidden');
   if (currentSession && !currentFinished) await window.photobooth.session.cancel(currentSession.id).catch(() => { });
   clearResultState();
+  clearLutPreviewUrls();
   state.session = null; state.sessionFinished = false; revokeRecoveryUrls(); state.shots = []; state.photoTransforms = {}; state.activeTransformId = ''; state.slotAssignments = []; state.activeSlotIndex = -1; refreshStats(); refreshRecoverableSessions();
 }
 
@@ -1411,7 +1645,7 @@ async function openSettings() {
   }
   await listCameras(); await refreshStats();
   const backend = await window.photobooth.gallery.health();
-  $('#backendHealth').textContent = backend.ok ? `Đang chạy · cổng ${backend.port} · v${backend.version}` : 'Chưa khởi động';
+  $('#backendHealth').textContent = backend.ok ? `Hoạt động bình thường · cổng ${backend.port}` : 'Chưa sẵn sàng nè';
   dialog.showModal();
 }
 
@@ -1429,61 +1663,106 @@ async function listCameras() {
         console.warn('Temporary camera acquisition failed:', err);
       }
     }
-    select.replaceChildren(new Option('Tự động chọn Camera', ''));
+    select.replaceChildren(new Option('Tự động chọn camera', ''));
     if (devices.length === 0) {
-      select.add(new Option('Không tìm thấy thiết bị webcam', ''));
+      select.add(new Option('Không tìm thấy camera nào', ''));
     } else {
       devices.forEach((device, index) => {
-        const label = device.label || `Webcam ${index + 1} (${device.deviceId.slice(0, 6)})`;
+        const label = device.label || `Camera ${index + 1} (${device.deviceId.slice(0, 6)})`;
         select.add(new Option(label, device.deviceId));
       });
     }
     select.value = state.config.camera.deviceId || '';
   } catch (error) {
     console.error('Lỗi đọc danh sách camera:', error);
-    select.replaceChildren(new Option('Tự động chọn Camera', ''));
+    select.replaceChildren(new Option('Tự động chọn camera', ''));
   }
 }
 
-async function saveSettings(event) {
-  event.preventDefault(); const patch = {};
-  for (const field of $('#settingsForm').elements) {
-    if (!field.name) continue;
-    let value = field.type === 'checkbox' ? field.checked : field.value;
-    if (field.type === 'number') value = Number(value);
-    if (field.name === 'camera.dslr.args') value = value.split('\n').map((item) => item.trim()).filter(Boolean);
-    setAtPath(patch, field.name, value);
+/** Save a single settings field immediately (auto-save on change). */
+async function saveSettingField(field) {
+  if (!field.name) return;
+  let value = field.type === 'checkbox' ? field.checked : field.value;
+  if (field.type === 'number') value = Number(value);
+  if (field.name === 'camera.dslr.args') value = value.split('\n').map((item) => item.trim()).filter(Boolean);
+  const patch = {};
+  setAtPath(patch, field.name, value);
+  try {
+    state.config = await window.photobooth.config.save(patch);
+  } catch (error) {
+    // Revert UI to actual backend value on validation failure
+    const actualValue = getAtPath(state.config, field.name);
+    if (field.type === 'checkbox') field.checked = Boolean(actualValue);
+    else field.value = actualValue ?? '';
+    throw error;
   }
-  state.config = await window.photobooth.config.save(patch);
-  applyBranding(); $('#settingsDialog').close(); toast('Đã lưu cài đặt');
+  // Sync UI to actual saved value (backend may have normalized)
+  const savedValue = getAtPath(state.config, field.name);
+  if (field.type === 'checkbox') field.checked = Boolean(savedValue);
+  else if (field.value !== String(savedValue ?? '')) field.value = savedValue ?? '';
+  applyBranding();
+  // Live-update mirror preview when toggled in settings
+  if (field.name === 'camera.mirrorPreview') {
+    const video = $('#cameraVideo');
+    if (video) video.classList.toggle('mirror', Boolean(savedValue));
+  }
 }
 
 function applyBranding() {
   $('#brandName').textContent = state.config.branding.name;
-  $('#brandTagline').textContent = state.config.branding.tagline;
+  $('#brandTagline').textContent = state.config.branding.tagline === 'Giữ lại khoảnh khắc của bạn'
+    ? 'Gói nụ cười mang về nha~'
+    : state.config.branding.tagline;
   document.documentElement.style.setProperty('--accent', state.config.branding.accent);
 }
 
 async function init() {
-  state.config = await window.photobooth.config.get(); state.selectionTargetCount = candidateCount(); applyBranding(); await loadFrames(); await refreshStats(); await refreshRecoverableSessions();
+  state.config = await window.photobooth.config.get(); state.luts = await window.photobooth.luts.list(); state.selectionTargetCount = candidateCount(); applyBranding(); renderLutOptions(); await loadFrames(); await refreshStats(); await refreshRecoverableSessions();
+  state.assetUnsubscribe = window.photobooth.assets?.onSynced(async (result) => {
+    if (!result?.ok) return;
+    await loadFrames();
+    state.luts = await window.photobooth.luts.list();
+    renderLutOptions();
+    const downloaded = Number(result.downloadedFrames || 0) + Number(result.downloadedLuts || 0);
+      if (downloaded > 0) toast(`Vừa có thêm ${downloaded} tài nguyên mới toanh ✨`);
+  });
+  const assetStatus = await window.photobooth.assets?.status();
+  if (assetStatus?.lastResult?.ok && !assetStatus.syncing) {
+    await loadFrames();
+    state.luts = await window.photobooth.luts.list();
+    renderLutOptions();
+  }
   $$('.mode-card').forEach((button) => button.onclick = openMode);
   $$('[data-back]').forEach((button) => button.onclick = goHome);
-  $('#confirmFrame').onclick = finalizePhoto; $('#confirmShots').onclick = openFrameSelection;
+  $('#confirmFrame').onclick = finalizePhoto; $('#confirmShots').onclick = () => openFrameSelection();
   $('#selectionTarget').onchange = changeSelectionTarget;
   $('#zoomComposition').onclick = () => { if (state.framePreviewUrl) openZoom(state.framePreviewUrl); };
   $('#captureNextButton').onclick = () => { if (!state.busy) finishCapturePhase().catch((error) => toast(error.message)); };
   $('#backToSelection').onclick = () => {
     if (state.navigatedFromSessions) openSessionsScreen();
-    else openCapture();
+    else openSelectionScreen();
   };
   $('#retakeAll').onclick = () => {
     if (state.navigatedFromSessions) openSessionsScreen();
     else openCapture();
   };
   $('#shutterButton').onclick = beginCapture; $('#cancelCapture').onclick = goHome;
-  $('#brandHome').onclick = goHome; $('#settingsButton').onclick = openSettings; $('#settingsForm').onsubmit = saveSettings;
+  $('#brandHome').onclick = goHome; $('#settingsButton').onclick = openSettings;
+  // Auto-save settings on any change
+  $('#settingsForm').addEventListener('change', (event) => {
+    const field = event.target;
+    if (field.name) saveSettingField(field).catch((error) => {
+      console.error('Could not save setting change:', error);
+      toast('Chưa lưu được thay đổi này, bạn thử lại nhé~');
+    });
+  });
+  $('#settingsForm').addEventListener('submit', (event) => event.preventDefault());
   $('#settingsClose').onclick = () => $('#settingsDialog').close();
   $('#settingsCancel').onclick = () => $('#settingsDialog').close();
+  // Mirror toggle button on capture screen
+  $('#mirrorToggleButton').onclick = toggleMirrorPreview;
+  syncMirrorToggleButton();
+  $('#importLutButton').onclick = importCubeLuts;
   $('#retakeButton').onclick = openMode;
   $('#changeFrameButton').onclick = changeFrameFromResult;
   $('#resultBack').onclick = () => {
@@ -1501,9 +1780,18 @@ async function init() {
     if (state.printCopies < 5) { state.printCopies += 1; $('#printCopiesDisplay').textContent = `${state.printCopies} bản`; }
   };
   $('#printButton').onclick = async () => {
-    const dataUrl = await new Promise((resolve) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsDataURL(state.resultBlob); });
-    const result = await window.photobooth.print({ dataUrl, profile: state.resultProfile, copies: state.printCopies });
-    toast(result.ok ? `Đã gửi lệnh in ${state.printCopies} bản` : `Không in được: ${result.error}`);
+    const btn = $('#printButton');
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      const dataUrl = await new Promise((resolve) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsDataURL(state.resultBlob); });
+      const result = await window.photobooth.print({ dataUrl, profile: state.resultProfile, copies: state.printCopies, sessionId: state.session?.id });
+      toast(result.ok ? `${state.printCopies} bản in đang được gửi đi ✨` : `Oops, chưa in được lúc này: ${result.error}`);
+    } catch (error) {
+      toast(`Oops, chưa in được lúc này: ${error.message}`);
+    } finally {
+      btn.disabled = false;
+    }
   };
 
   const zoomWrap = $('.zoom-image-wrap');
@@ -1576,7 +1864,7 @@ async function init() {
       const rangeY = (cropState.SH - cropState.cropH);
       
       if (rangeX > 0) {
-        const dPanX = (-dx / scaleBox) / rangeX * 100;
+        const dPanX = ((cropState.mirrored ? dx : -dx) / scaleBox) / rangeX * 100;
         cropState.panX = Math.max(0, Math.min(100, cropState.initialPanX + dPanX));
       }
       if (rangeY > 0) {
@@ -1615,9 +1903,15 @@ async function init() {
     cropState.rotation = (cropState.rotation + 90) % 360;
     updateCropModalLayout();
   };
+  $('#cropMirrorBtn').onclick = () => {
+    cropState.mirrored = !cropState.mirrored;
+    $('#cropMirrorBtn').setAttribute('aria-pressed', String(cropState.mirrored));
+    updateCropModalLayout();
+  };
   $('#cropResetBtn').onclick = () => {
-    cropState.panX = 50; cropState.panY = 50; cropState.zoom = 1; cropState.rotation = 0;
+    cropState.panX = 50; cropState.panY = 50; cropState.zoom = 1; cropState.rotation = 0; cropState.mirrored = false;
     $('#cropModalZoom').value = 1;
+    $('#cropMirrorBtn').setAttribute('aria-pressed', 'false');
     updateCropModalLayout();
   };
   $('#cropModalClose').onclick = closeCropModal;
@@ -1628,7 +1922,8 @@ async function init() {
         panX: cropState.panX,
         panY: cropState.panY,
         zoom: cropState.zoom,
-        rotation: cropState.rotation
+        rotation: cropState.rotation,
+        mirrored: cropState.mirrored
       };
       renderTransformControls();
       scheduleFramePreview(0);
@@ -1642,21 +1937,22 @@ async function init() {
     $$('.tab').forEach((item) => item.classList.toggle('active', item === tab));
     $$('.tab-panel').forEach((panel) => panel.classList.toggle('active', panel.dataset.panel === tab.dataset.tab));
   });
-  $('#checkBridge').onclick = async () => { const result = await window.photobooth.native.health(); $('#bridgeHealth').textContent = result.ok ? `C++ bridge ${result.version}: OK` : result.error; };
-  $('#syncFrames').onclick = async () => { try { await loadFrames(true); toast('Đã đồng bộ khung'); } catch (error) { toast(error.message); } };
-  $('#connectDrive').onclick = async () => {
+  $('#checkBridge').onclick = async () => { const result = await window.photobooth.native.health(); $('#bridgeHealth').textContent = result.ok ? `DSLR đã kết nối · v${result.version}` : result.error; };
+  $('#syncFrames').onclick = async () => {
     try {
-      await window.photobooth.drive.authorize($('#oauthClientFile').value);
-      state.config = await window.photobooth.config.get(); toast('Đã kết nối Google Drive');
+      const result = await loadFrames(true);
+      const sync = result.assetSync;
+      const downloaded = Number(sync?.downloadedFrames || 0) + Number(sync?.downloadedLuts || 0);
+      toast(downloaded ? `Đã cập nhật ${downloaded} tài nguyên mới toanh` : 'Kho sáng tạo đã mới nhất rồi ✨');
     } catch (error) { toast(error.message); }
   };
   state.uploadUnsubscribe = window.photobooth.onUploadStatus((message) => {
     refreshStats();
     if (message.sessionId !== state.session?.id) return;
-    if (message.status === 'uploaded') $('#resultStatus').textContent = 'Ảnh đã đồng bộ an toàn lên Google Drive';
-    if (message.status === 'retrying') $('#resultStatus').textContent = 'Mạng chưa ổn định · ảnh đang nằm an toàn trong hàng đợi local';
+    if (message.status === 'uploaded') $('#resultStatus').textContent = 'Album online đã sẵn sàng rồi nè ✨';
+    if (message.status === 'retrying') $('#resultStatus').textContent = 'Mạng đang chập chờn · ảnh vẫn an toàn trên máy nha~';
   });
-  $('#queuePill').onclick = async () => { await window.photobooth.queue.retry(); await refreshStats(); toast('Đã chạy lại hàng đợi upload'); };
+  $('#queuePill').onclick = async () => { await window.photobooth.queue.retry(); await refreshStats(); toast('Đang thử lưu lại những ảnh còn chờ…'); };
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && $('#zoomModal').classList.contains('open')) { closeZoom(); return; }
     if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'a') openSettings();
@@ -1690,5 +1986,5 @@ async function init() {
 }
 
 init().then(() => {
-  toast('READY');
+  toast('Chạm đã sẵn sàng rồi nè ✨');
 }).catch((error) => { console.error(error); toast(error.message); });

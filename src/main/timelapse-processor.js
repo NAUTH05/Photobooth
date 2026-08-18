@@ -28,7 +28,7 @@ export function buildTimelapseArgs(inputPath, outputPath, { speed = 2, crf = 28 
     '-an', '-vf', `setpts=${setPts}*PTS,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=30`,
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(safeCrf),
     '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
-    '-metadata', `title=Roti Photobooth Timelapse ${safeSpeed}x`,
+    '-metadata', `title=Chạm Photobooth Timelapse ${safeSpeed}x`,
     outputPath
   ];
 }

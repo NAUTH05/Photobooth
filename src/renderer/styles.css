@@ -1,5 +1,7 @@
 :root {
-  font-family: "Segoe UI", system-ui, sans-serif;
+  --font-body: "Nunito", Arial, sans-serif;
+  --font-display: "Quicksand", "Nunito", sans-serif;
+  font-family: var(--font-body);
   color: #173c34;
   background: #f3eee6;
   font-synthesis: none;
@@ -62,7 +64,7 @@ button {
   color: var(--ink);
   background: transparent;
   border: 1px solid var(--ink);
-  font: italic 25px Georgia, serif;
+  font: 700 25px var(--font-display);
 }
 
 .brand strong,
@@ -71,7 +73,7 @@ button {
 }
 
 .brand strong {
-  font: 700 19px Georgia, serif;
+  font: 700 19px var(--font-display);
 }
 
 .brand small {
@@ -162,7 +164,7 @@ button {
 }
 
 .hero-copy h1 {
-  font: 400 clamp(50px, 5.4vw, 82px)/.93 Georgia, serif;
+  font: 600 clamp(50px, 5.4vw, 82px)/.93 var(--font-display);
   letter-spacing: -.06em;
   margin: 0 0 28px;
   max-width: 740px;
@@ -259,7 +261,7 @@ button {
 }
 
 .poster-stack strong {
-  font: italic 400 clamp(52px, 5vw, 78px)/.84 Georgia, serif;
+  font: 600 clamp(52px, 5vw, 78px)/.84 var(--font-display);
   color: #ef947e;
   letter-spacing: -.06em;
 }
@@ -427,6 +429,8 @@ button {
 
 .section-heading h2,
 .dialog-head h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
   font-size: 30px;
   margin: 0;
 }
@@ -456,6 +460,130 @@ button {
 
 .frame-heading {
   min-width: 0;
+}
+
+.lut-toolbar {
+  width: min(620px, calc(100vw - 470px));
+  margin-left: auto;
+  padding: 7px 9px 8px;
+  border: 2px solid #40494a;
+  border-radius: 16px;
+  background: #f8ffff;
+  box-shadow: 0 6px 18px #0d555217;
+}
+
+.lut-toolbar-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 5px;
+  color: #657573;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+
+.lut-import-button {
+  margin-left: auto;
+  padding: 3px 7px;
+  border: 1px dashed var(--accent);
+  border-radius: 7px;
+  color: var(--accent);
+  background: #fff8f4;
+  font: 800 8px var(--font-display);
+  letter-spacing: .04em;
+  cursor: pointer;
+}
+
+.lut-import-button:hover:not(:disabled) {
+  color: white;
+  background: var(--accent);
+}
+
+.lut-import-button:disabled {
+  cursor: wait;
+  opacity: .48;
+}
+
+.lut-toolbar-title strong {
+  color: var(--accent);
+  font: 700 10px var(--font-display);
+  letter-spacing: .03em;
+}
+
+.lut-options {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #9bafab transparent;
+}
+
+.lut-option {
+  flex: 1 0 78px;
+  min-width: 78px;
+  padding: 5px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid #b8c5c3;
+  border-radius: 10px;
+  color: #455755;
+  background: white;
+  cursor: pointer;
+  transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+
+.lut-option.custom::after {
+  content: 'CUBE';
+  padding: 1px 3px;
+  border-radius: 4px;
+  color: currentColor;
+  background: #8db5ad35;
+  font: 800 6px var(--font-display);
+  letter-spacing: .04em;
+}
+
+.lut-option:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+}
+
+.lut-option.active {
+  color: white;
+  background: var(--ink);
+  border-color: var(--ink);
+  box-shadow: 0 4px 12px #173c3438;
+}
+
+.lut-option:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.lut-option:disabled {
+  cursor: wait;
+  opacity: .48;
+}
+
+.lut-swatch {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border: 1px solid #ffffff99;
+  border-radius: 50%;
+  background: var(--lut-swatch);
+  box-shadow: inset 0 0 0 1px #00000012;
+}
+
+.lut-option strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 700 9px var(--font-display);
 }
 
 .frame-heading .composition-zoom {
@@ -491,6 +619,7 @@ button {
 }
 
 .editor-panel-title strong {
+  font-family: var(--font-display);
   font-size: 12px;
 }
 
@@ -751,48 +880,28 @@ button {
   cursor: pointer;
 }
 
-.photo-transform-controls {
-  display: grid;
-  gap: 9px;
-  padding: 10px;
-  border-top: 2px solid #40494a;
-  background: #fff;
-}
-
-.transform-shots,
-.transform-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.transform-shots button,
-.transform-buttons button {
-  border: 1px solid #899795;
-  border-radius: 7px;
-  background: white;
-  padding: 6px 8px;
+.frame-photo .photo-edit {
+  position: absolute;
+  left: 9px;
+  top: 9px;
+  border: 0;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  color: white;
+  background: var(--accent);
   cursor: pointer;
 }
 
-.transform-shots button.active {
-  color: white;
-  background: var(--ink);
-  border-color: var(--ink);
+.frame-photo .photo-edit:disabled {
+  opacity: .42;
+  cursor: not-allowed;
 }
 
-.photo-transform-controls label {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 8px;
-  align-items: center;
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.photo-transform-controls input {
-  width: 100%;
-  accent-color: var(--accent);
+.photo-transform-controls {
+  padding: 10px;
+  border-top: 2px solid #40494a;
+  background: #fff;
 }
 
 .frame-footer {
@@ -816,6 +925,7 @@ button {
 .secondary-button,
 .text-button,
 .small-button {
+  font-family: var(--font-display);
   border: 0;
   border-radius: 16px;
   padding: 14px 22px;
@@ -953,10 +1063,11 @@ body.capture-active #app {
   top: 66.666%;
 }
 
+
 .timelapse-status {
   position: absolute;
   z-index: 7;
-  top: 22px;
+  top: 112px;
   left: 24px;
   display: none;
   align-items: center;
@@ -1029,7 +1140,7 @@ body.capture-active #app {
 
 .capture-message {
   position: absolute;
-  bottom: 34px;
+  bottom: 116px;
   left: 38px;
   color: white;
   font-weight: 700;
@@ -1038,7 +1149,7 @@ body.capture-active #app {
 
 .shot-progress {
   position: absolute;
-  bottom: 39px;
+  bottom: 121px;
   right: 38px;
   display: flex;
   gap: 8px;
@@ -1080,6 +1191,30 @@ body.capture-active #app {
   flex-direction: column;
   align-items: center;
   gap: 8px;
+}
+
+.mirror-toggle-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2px solid #ffffff80;
+  background: #111b;
+  color: white;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: 0.15s;
+}
+
+.mirror-toggle-btn:hover {
+  background: #111d;
+}
+
+.mirror-toggle-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .capture-next-btn {
@@ -1600,6 +1735,8 @@ body.capture-active #app {
 }
 
 .crop-dialog-head h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
   font-size: 22px;
   margin: 0;
   color: var(--ink);
@@ -1647,6 +1784,13 @@ body.capture-active #app {
   left: 0;
   pointer-events: none;
   transform-origin: top left;
+}
+
+.crop-mirror-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transform-origin: center;
 }
 
 .crop-image-stage img,
@@ -1781,6 +1925,12 @@ body.capture-active #app {
   font-size: 11px;
 }
 
+#cropMirrorBtn[aria-pressed="true"] {
+  color: white;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
 .crop-tip {
   font-size: 10.5px;
   color: #7a6e70;
@@ -1802,7 +1952,7 @@ body.capture-active #app {
 
 .photo-transform-controls .crop-open-btn {
   width: 100%;
-  margin-top: 8px;
+  margin-top: 0;
   background: #173c34;
   color: white;
   border-radius: 10px;
@@ -2208,6 +2358,20 @@ dialog::backdrop {
 }
 
 @media (max-width: 1100px) {
+  .lut-toolbar {
+    width: 470px;
+  }
+
+  .lut-option {
+    gap: 3px;
+    padding-inline: 3px;
+  }
+
+  .lut-swatch {
+    width: 17px;
+    height: 17px;
+  }
+
   #homeScreen.active {
     gap: 3vw;
   }
@@ -2305,7 +2469,6 @@ dialog::backdrop {
   }
 
   .photo-transform-controls {
-    gap: 6px;
     padding: 7px;
   }
 

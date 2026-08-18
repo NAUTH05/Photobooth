@@ -1,4 +1,4 @@
-# Roti Photobooth
+# Chạm Photobooth
 
 Ứng dụng photobooth lưu động cho Windows. Electron phụ trách giao diện cảm ứng và tích hợp hệ điều hành; backend gallery/API chạy bằng C++ độc lập. C++ camera bridge kích hoạt máy ảnh DSLR qua một Canon EDSDK helper.
 
@@ -8,12 +8,12 @@
 - Chụp manual từng ảnh hoặc auto theo cấu hình; sản phẩm hiện tập trung hoàn toàn vào ảnh tĩnh.
 - Chế độ DSLR thông qua C++ bridge, có timeout và kiểm tra file đầu ra.
 - In ảnh qua hệ thống in của Windows, hỗ trợ máy in mặc định hoặc tên máy in cấu hình.
-- Mỗi phiên có timestamp, lưu local trước, tự retry upload Google Drive và tiếp tục sau khi app khởi động lại.
-- Upload theo thư mục phiên, kiểm tra MD5 và tạo QR mở gallery web local/LAN để xem, tải ảnh digital.
+- Mỗi phiên có timestamp, lưu local trước, tự retry upload Cloudflare R2 và tiếp tục sau khi app khởi động lại.
+- Upload theo thư mục phiên, tạo QR mở gallery web để xem, tải ảnh digital.
 - Backend gallery C++ đọc snapshot hàng đợi nguyên tử, xác thực token theo thời gian hằng, từ chối nội dung ảnh giả và chặn toàn bộ gallery hết hạn.
-- Gallery web responsive có lightbox, tải ảnh gốc và trạng thái rõ ràng khi link hết hạn hoặc ảnh đang đồng bộ.
-- Chỉ dọn file local đã upload và đã khớp checksum; thời gian giữ lại có thể cấu hình.
-- Khung ảnh đồng bộ định kỳ từ một thư mục Google Drive bằng `manifest.json`.
+- Gallery web responsive có lightbox, tải ảnh lẻ đã hậu kỳ và trạng thái rõ ràng khi link hết hạn hoặc ảnh đang đồng bộ.
+- Tự dọn file local cũ hơn 7 ngày mỗi lần khởi động app; thời gian giữ lại sau upload có thể cấu hình thêm.
+- Khung ảnh đồng bộ từ kho sáng tạo online (frame PNG/WebP + LUT `.cube`).
 - Màn hình quản trị mở bằng nút bánh răng hoặc `Ctrl+Shift+A`.
 
 ## Chạy bản phát triển
@@ -41,21 +41,9 @@ Tạo bộ cài Windows NSIS:
 npm run dist:win
 ```
 
-## Kết nối Google Drive cá nhân
-
-1. Tạo project trên Google Cloud Console và bật Google Drive API.
-2. Cấu hình OAuth consent screen, tạo OAuth client loại **Desktop app**, tải file JSON về máy photobooth.
-3. Trong Drive, tạo một thư mục lưu phiên và một thư mục chứa khung. Folder ID là đoạn sau `/folders/` trong URL.
-4. Mở Quản trị → Google Drive, nhập hai Folder ID và đường dẫn OAuth JSON.
-5. Chọn **Kết nối tài khoản Google**, đăng nhập account có gói dung lượng, rồi bật Google Drive.
-
-Refresh token được mã hóa bằng Windows DPAPI trong thư mục dữ liệu của app. Nếu dùng Google Workspace/Shared Drive, có thể điền service-account JSON thay cho OAuth và chia sẻ cả hai thư mục cho `client_email` của service account.
-
-Khi bật link công khai, ứng dụng đặt quyền `anyone with the link` cho thư mục của từng phiên. Không bật lựa chọn này nếu ảnh không được phép truy cập qua QR công khai.
-
 ## Cấu trúc thư mục khung
 
-Upload `manifest.json` và các ảnh PNG trong cùng thư mục Drive. Mẫu nằm tại `frames/manifest.example.json`; hướng dẫn chi tiết nằm tại `frames/FRAME_GUIDE.md`.
+Khung ảnh được đặt trong thư mục `frames/` hoặc tải từ kho sáng tạo online. Mẫu nằm tại `frames/manifest.example.json`; hướng dẫn chi tiết nằm tại `frames/FRAME_GUIDE.md`.
 
 - `file`: PNG RGBA trong suốt kích thước 1200×1800, dùng cho ảnh in 4×6.
 - `previewFile`: thumbnail PNG/JPG khoảng 400×600 cho danh sách khung; có thể bỏ trống.
@@ -69,8 +57,7 @@ Upload `manifest.json` và các ảnh PNG trong cùng thư mục Drive. Mẫu n�
 
 File `.env` ở thư mục gốc được nạp sau cấu hình mặc định và cấu hình người dùng. Các giá trị máy in, offset, cổng gallery, QR, độ phân giải composite và chất lượng JPEG được dùng trực tiếp.
 
-- `MIRROR_PREVIEW=true`: lật gương riêng phần xem trước để khách dễ tạo dáng.
-- `MIRROR_OUTPUT=false`: ảnh lưu, ảnh ghép và ảnh in giữ đúng chiều thực tế.
+- `MIRROR_PREVIEW=true`: lật gương phần xem trước và ảnh chụp để khách dễ tạo dáng.
 - `LOCAL_FRAMES_DIR=./frames`: dùng bộ frame local của nhà cung cấp cũ.
 - `COMPOSITE_TARGET_RESOLUTION=3600`: xuất ảnh dọc 2400×3600.
 - `PRINT_4X6_OFFSET_X/Y`: dịch ảnh in theo millimet.
@@ -80,12 +67,16 @@ File `.env` ở thư mục gốc được nạp sau cấu hình mặc định v�
 
 ## Timelapse 2×
 
-Mỗi phiên tự bắt đầu ghi video ngay khi webcam sẵn sàng và dừng sau ảnh cuối cùng. Video nguồn được FFmpeg tăng tốc thật 2×, xuất MP4 H.264 rồi lưu chung session để xem, tải hoặc upload Google Drive cùng bộ ảnh.
+Mỗi phiên tự bắt đầu ghi video ngay khi webcam sẵn sàng và dừng sau ảnh cuối cùng. Video nguồn được FFmpeg tăng tốc thật 2×, xuất MP4 H.264 rồi lưu chung session để xem, tải hoặc upload lên Cloudflare R2 cùng bộ ảnh.
 
 - `TIMELAPSE_ENABLED=true`: bật ghi timelapse tự động.
 - `VIDEO_SPEED=0.5`: rút thời lượng còn một nửa, tương đương tốc độ 2×.
 - `VIDEO_CRF`: chất lượng MP4 đầu ra, số càng nhỏ càng nét và dung lượng càng lớn.
 - `TIMELAPSE_VIDEO_BITS_PER_SECOND`: bitrate của video WebM tạm trước khi xử lý.
+
+## Kho sáng tạo frame/LUT
+
+Website có khu quản trị riêng tại `/admin` để upload và gỡ frame PNG/WebP cùng LUT 3D `.cube`. App đọc manifest có SHA-256 khi khởi động, chỉ tải phần thiếu và luôn giữ cache cũ nếu mạng hoặc tệp mới gặp lỗi. Xem [hướng dẫn kho sáng tạo](docs/creative-library.md) để cấu hình local và production.
 
 ## Canon R100 / DSLR
 
@@ -93,23 +84,38 @@ Do Canon EDSDK có giấy phép phân phối riêng, repo cung cấp bridge C++ 
 
 ## Dữ liệu local và khôi phục
 
-Dữ liệu runtime nằm trong Electron `userData/runtime-data`, không nằm trong source repo. Queue dùng ghi file nguyên tử. Nếu mất điện giữa lúc chụp/upload, phiên có media sẽ được đưa lại về trạng thái chờ ở lần mở app sau. Việc xóa chỉ xảy ra sau khi Drive trả `md5Checksum` trùng với file local và hết thời gian giữ lại.
+Dữ liệu runtime nằm trong Electron `userData/runtime-data`, không nằm trong source repo. Queue dùng ghi file nguyên tử. Nếu mất điện giữa lúc chụp/upload, phiên có media sẽ được đưa lại về trạng thái chờ ở lần mở app sau. Mỗi lần app khởi động, các file local cũ hơn 7 ngày được tự động xóa bất kể trạng thái upload. File đã upload xong và khớp checksum cũng được dọn sớm hơn nếu vượt quá thời gian giữ lại cấu hình (`storage.retentionHoursAfterUpload`).
 
 ## Gallery QR local/LAN
 
 Ứng dụng tự khởi động `photobooth-gallery-backend.exe` ở cổng `3847` và đưa IP LAN của máy vào QR, ví dụ `http://192.168.1.20:3847/s/...`. Nếu cổng bận, backend tự chọn cổng trống và QR dùng đúng cổng thực tế. Điện thoại phải kết nối cùng Wi‑Fi/LAN với máy photobooth. Windows có thể hỏi quyền Firewall ở lần chạy đầu; cần cho phép truy cập trên mạng Private.
 
-Mỗi URL có session ID và token ngẫu nhiên riêng, ví dụ `https://photos.example.com/s/PB_...?...`. Vì vậy một domain có thể phục vụ đồng thời nhiều khách nhưng mỗi người chỉ có URL riêng của phiên mình. Gallery hiển thị timestamp, ảnh gốc, ảnh ghép và nút tải ảnh.
+Mỗi URL có session ID và token ngẫu nhiên riêng, ví dụ `https://photos.example.com/s/PB_...?...`. Vì vậy một domain có thể phục vụ đồng thời nhiều khách nhưng mỗi người chỉ có URL riêng của phiên mình. Gallery hiển thị timestamp, ảnh lẻ đã lên màu, ảnh ghép và nút tải ảnh.
 
-Thời hạn mặc định là 7 ngày và có thể đổi trong Quản trị → Hệ thống. Khi hết hạn, route gallery trả HTTP 410 cùng trang thông báo hết hạn; ứng dụng cũng thu hồi quyền `anyone` của thư mục Drive khi máy online. Nếu app tắt đúng thời điểm hết hạn, việc thu hồi Drive được thực hiện ở lần chạy online tiếp theo.
+Thời hạn mặc định là 7 ngày và có thể đổi trong Quản trị → Hệ thống. Khi hết hạn, route gallery trả HTTP 410 cùng trang thông báo hết hạn.
 
-Sau khi file local được dọn, gallery chuyển sang bản đã xác minh trên Google Drive. Khi có domain/hosting, điền URL gốc vào `gallery.publicBaseUrl`. Backend giữ route `/s/:sessionId?t=...` và API `/api/public/sessions/:sessionId?t=...` để frontend gallery không phụ thuộc vào implementation cũ.
+Khi có domain/hosting, điền URL gốc vào `gallery.publicBaseUrl`. Backend giữ route `/s/:sessionId?t=...` và API `/api/public/sessions/:sessionId?t=...` để frontend gallery không phụ thuộc vào implementation cũ.
+
+## Heroku + Firestore + Cloudflare R2 Gallery
+
+Website production nằm trong `web/` và chạy Node.js trên Heroku. Firestore lưu metadata/lifecycle; R2 private lưu ảnh, video, frame và LUT. App dùng upload secret để xin presigned URL ngắn hạn từ Heroku, upload file trực tiếp tới R2, rồi yêu cầu Heroku xác minh kích thước/checksum trước khi chuyển gallery sang `ready`.
+
+Trong Quản trị → Hệ thống, nhập URL Heroku và upload secret tương ứng. Tên key cấu hình `cloudflare.*` được giữ để tương thích settings cũ; QR luôn dùng URL HTTPS công khai của gallery server.
+
+Tài liệu chi tiết:
+
+- [Kiến trúc](docs/architecture.md)
+- [Session lifecycle](docs/session-lifecycle.md)
+- [Upload protocol](docs/upload-protocol.md)
+- [Recovery và data safety](docs/recovery.md)
+- [UI design brief](docs/ui-design-brief.md)
+- [Audit và roadmap](docs/implementation-roadmap.md)
 
 ## Kiến trúc backend C++
 
-- `native/gallery_backend.cpp`: HTTP/API server, kiểm tra token và thời hạn, phục vụ ảnh local hoặc chuyển hướng sang bản Drive đã xác minh.
+- `native/gallery_backend.cpp`: HTTP/API server, kiểm tra token và thời hạn, phục vụ ảnh local.
 - `src/main/cpp-gallery-backend.js`: lớp mỏng để Electron khởi động, giám sát và dừng executable C++.
 - `src/gallery/`: frontend gallery công khai, không chứa logic truy cập file trực tiếp.
 - `src/main/local-store.js`: ghi snapshot nguyên tử và chỉ nhận JPEG/PNG có chữ ký file hợp lệ.
 
-Gallery rỗng bị loại bỏ thay vì lưu metadata rác. Phiên hết hạn không xuất hiện trong hàng đợi upload và được kiểm tra lại ngay trước từng file, tránh race condition với Google Drive.
+Gallery rỗng bị loại bỏ thay vì lưu metadata rác. Phiên hết hạn không xuất hiện trong hàng đợi upload và được kiểm tra lại ngay trước từng file.

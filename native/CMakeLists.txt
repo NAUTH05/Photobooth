@@ -8,6 +8,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(FetchContent)
 set(HTTPLIB_COMPILE OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_TEST OFF CACHE BOOL "" FORCE)
+# The local gallery only serves HTTP on the kiosk/LAN. Turning off optional
+# compression and TLS keeps the Windows executable self-contained instead of
+# requiring the MSYS2 OpenSSL, Brotli and zlib DLLs next to Electron.
+set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+set(HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
   cpp_httplib
   # v0.18.7 is the newest line verified with the MinGW toolchain used by the kiosk build.

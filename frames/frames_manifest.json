@@ -498,5 +498,25 @@
   "layout": "4x6",
   "category": "4x6-portrait",
   "local": "examples\\frames\\10937_khung_t__ng_ch_a_.png"
+ },
+ {
+  "id": 11472,
+  "name": "Mùa hè xanh 2026",
+  "previewUrl": "",
+  "url": "",
+  "photo_count": 1,
+  "layout": "4x6",
+  "category": "4x6-landscape",
+  "local": "examples\\frames\\11472_N5.png"
+ },
+ {
+  "id": 12170,
+  "name": "Khung ngang tối giản",
+  "previewUrl": "",
+  "url": "",
+  "photo_count": 1,
+  "layout": "4x6",
+  "category": "4x6-landscape",
+  "local": "examples\\frames\\12170_2.png"
  }
 ]

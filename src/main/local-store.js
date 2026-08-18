@@ -2,14 +2,25 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { normalizePhotoTransform } from '../shared/image-layout.js';
+import { normalizePhotoFilterId } from '../shared/photo-filters.js';
 
 const safeTime = () => new Date().toISOString().replace(/[:.]/g, '-');
 const allowedExtensions = new Set(['jpg', 'jpeg', 'png', 'mp4']);
 const originalKinds = new Set(['photo-original', 'dslr-original']);
+const thumbnailSourceKinds = new Set([...originalKinds, 'photo-processed']);
 const validTargetCounts = new Set([4, 6, 8]);
 const validResultProfiles = new Set(['4x6-portrait', '4x6-landscape', '2x6']);
 const restorableResultStatuses = new Set(['capturing', 'recoverable', 'pending', 'uploading', 'retrying', 'uploaded', 'failed']);
 const isExpired = (session) => Boolean(session.expiresAt && Date.parse(session.expiresAt) <= Date.now());
+const normalizeDraftLutId = (value) => /^cube-[a-f0-9]{20}$/.test(String(value || '')) ? String(value) : normalizePhotoFilterId(value);
+
+function recordEvent(session, type, detail = {}) {
+  const at = new Date().toISOString();
+  session.updatedAt = at;
+  session.events ??= [];
+  session.events.push({ id: crypto.randomUUID(), type, at, ...detail });
+  if (session.events.length > 100) session.events.splice(0, session.events.length - 100);
+}
 
 function sessionFolderTime(date = new Date()) {
   const value = new Date(date);
@@ -49,9 +60,13 @@ function publicSession(session, { includeItems = false, includeDraft = false } =
     mode: session.mode,
     createdAt: session.createdAt,
     status: session.status,
+    workflowStep: session.workflowStep,
+    updatedAt: session.updatedAt,
     recoveredAt: session.recoveredAt,
     expiresAt: session.expiresAt,
-    itemCount: (session.items || []).filter((item) => !item.deletedAt).length
+    publishedLutId: session.publishedLutId || 'natural',
+    itemCount: (session.items || []).filter((item) => !item.deletedAt && !item.galleryHidden && item.kind !== 'photo-thumbnail').length,
+    printCount: (session.printJobs || []).filter((job) => job.status === 'printed').reduce((sum, job) => sum + (job.copies || 0), 0)
   };
   if (includeItems) value.items = (session.items || []).filter((item) => !item.deletedAt).map(publicItem);
   if (includeDraft && session.draft) value.draft = structuredClone(session.draft);
@@ -81,6 +96,10 @@ export class LocalStore {
     let recovered = false;
     for (const session of Object.values(this.queue.sessions)) {
       session.items ??= [];
+      session.printJobs ??= [];
+      session.events ??= [];
+      session.updatedAt ??= session.createdAt;
+      session.workflowStep ??= session.draft?.step || (session.finishedAt ? 'result' : 'capture');
       const expectedDirectory = this.sessionPath(session.id);
       for (const item of session.items) {
         if (!item.filename || item.filename !== path.basename(item.filename)) {
@@ -146,19 +165,20 @@ export class LocalStore {
     const id = `PB_${now.toISOString().replace(/[-:.]/g, '').replace('Z', '')}_${crypto.randomBytes(3).toString('hex')}`;
     const folderName = await this.reserveSessionFolder(now);
     this.queue.sessions[id] = {
-      id, folderName, mode, createdAt: now.toISOString(), status: 'capturing', items: [], attempts: 0,
+      id, folderName, mode, createdAt: now.toISOString(), updatedAt: now.toISOString(), status: 'capturing', workflowStep: 'capture', items: [], printJobs: [], events: [], attempts: 0,
       galleryToken: crypto.randomBytes(18).toString('base64url'),
       expiresAt: new Date(Date.now() + Math.max(1, expirationDays) * 86400000).toISOString()
     };
+    recordEvent(this.queue.sessions[id], 'session-created', { workflowStep: 'capture' });
     await this.persist();
     return publicSession(this.queue.sessions[id]);
   }
 
-  async saveArtifact({ sessionId, kind, extension, bytes, originalName, profile }) {
+  async saveArtifact({ sessionId, kind, extension, bytes, originalName, profile, sourceItemId, lutId }) {
     const session = this.queue.sessions[sessionId];
     if (!session) throw new Error('Session not found');
     if (isExpired(session)) throw new Error('Gallery đã hết hạn');
-    if (kind === 'photo-strip') {
+    if (kind === 'photo-strip' || kind === 'photo-processed') {
       if (['cancelled', 'failed'].includes(session.status)) throw new Error('Session đã bị hủy');
     } else {
       if (!['capturing', 'recoverable'].includes(session.status)) throw new Error('Session không còn nhận ảnh');
@@ -179,23 +199,95 @@ export class LocalStore {
       md5: crypto.createHash('md5').update(buffer).digest('hex'), status: 'pending', createdAt: new Date().toISOString()
     };
     if (kind === 'photo-strip') item.profile = resultProfile;
+    if (kind === 'photo-processed') {
+      const source = session.items.find((candidate) => candidate.id === String(sourceItemId || '') && originalKinds.has(candidate.kind) && !candidate.deletedAt);
+      if (!source) {
+        try { await fs.unlink(target); } catch { }
+        throw new Error('Ảnh nguồn hậu kỳ không hợp lệ');
+      }
+      item.sourceItemId = source.id;
+      item.lutId = normalizeDraftLutId(lutId);
+    }
     const previousResult = session.result ? structuredClone(session.result) : null;
+    const previousCloudflareState = {
+      status: session.cloudflareStatus,
+      nextAttemptAt: session.cloudflareNextAttemptAt
+    };
+    const previousWorkflowStep = session.workflowStep;
+    const previousUpdatedAt = session.updatedAt;
+    const previousEventCount = session.events?.length || 0;
     session.items.push(item);
+    session.workflowStep = kind === 'photo-strip' || session.finishedAt ? 'result' : 'capture';
+    recordEvent(session, 'artifact-saved', { artifactId: item.id, kind, workflowStep: session.workflowStep });
     if (kind === 'photo-strip') {
       session.result = { artifactId: item.id, profile: resultProfile, readyAt: item.createdAt, acknowledgedAt: null };
+      if (session.finishedAt) {
+        session.cloudflareStatus = 'pending';
+        session.cloudflareNextAttemptAt = null;
+      }
+    }
+    if (kind === 'photo-processed' && session.finishedAt) {
+      session.cloudflareStatus = 'pending';
+      session.cloudflareNextAttemptAt = null;
     }
     try {
       await this.persist();
     } catch (error) {
       session.items.pop();
+      session.workflowStep = previousWorkflowStep;
+      session.updatedAt = previousUpdatedAt;
+      session.events?.splice(previousEventCount);
       if (kind === 'photo-strip') {
         if (previousResult) session.result = previousResult;
         else delete session.result;
       }
+      if (kind === 'photo-strip' || kind === 'photo-processed') {
+        if (previousCloudflareState.status === undefined) delete session.cloudflareStatus;
+        else session.cloudflareStatus = previousCloudflareState.status;
+        if (previousCloudflareState.nextAttemptAt === undefined) delete session.cloudflareNextAttemptAt;
+        else session.cloudflareNextAttemptAt = previousCloudflareState.nextAttemptAt;
+      }
       try { await fs.unlink(target); } catch { }
       throw error;
     }
+    if (thumbnailSourceKinds.has(kind)) await this.createThumbnail(session, item, buffer);
     return publicItem(item);
+  }
+
+  async createThumbnail(session, sourceItem, sourceBuffer) {
+    const filename = `${safeTime()}_${String(session.items.length + 1).padStart(2, '0')}_thumbnail.jpg`;
+    const target = path.join(this.sessionPath(session.id), filename);
+    const previousUpdatedAt = session.updatedAt;
+    const previousEventCount = session.events?.length || 0;
+    let item = null;
+    try {
+      const sharp = (await import('sharp')).default;
+      const buffer = await sharp(sourceBuffer, { failOn: 'warning' })
+        .rotate()
+        .resize({ width: 640, height: 640, fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 76, progressive: true })
+        .toBuffer();
+      await fs.writeFile(target, buffer);
+      item = {
+        id: crypto.randomUUID(),
+        kind: 'photo-thumbnail',
+        sourceItemId: sourceItem.id,
+        filename,
+        path: target,
+        size: buffer.length,
+        md5: crypto.createHash('md5').update(buffer).digest('hex'),
+        status: 'pending',
+        createdAt: new Date().toISOString()
+      };
+      session.items.push(item);
+      recordEvent(session, 'thumbnail-created', { artifactId: item.id, sourceItemId: sourceItem.id });
+      await this.persist();
+    } catch {
+      if (item) session.items = session.items.filter((candidate) => candidate.id !== item.id);
+      session.events?.splice(previousEventCount);
+      session.updatedAt = previousUpdatedAt;
+      try { await fs.unlink(target); } catch { }
+    }
   }
 
   async registerExisting({ sessionId, kind, filePath }) {
@@ -338,6 +430,7 @@ export class LocalStore {
       targetCount,
       selectedArtifactIds,
       frameId: typeof draft.frameId === 'string' ? draft.frameId.slice(0, 200) : '',
+      lutId: normalizeDraftLutId(draft.lutId),
       slotAssignments,
       transforms,
       step: ['selection', 'frame'].includes(draft.step) ? draft.step : 'selection',
@@ -349,6 +442,8 @@ export class LocalStore {
     const session = this.queue.sessions[sessionId];
     if (!session || ['cancelled', 'failed'].includes(session.status) || isExpired(session)) throw new Error('Phiên chụp không khả dụng');
     session.draft = this.validateDraft(session, draft);
+    session.workflowStep = session.draft.step;
+    recordEvent(session, 'draft-saved', { workflowStep: session.workflowStep });
     await this.persist();
     return structuredClone(session.draft);
   }
@@ -365,7 +460,9 @@ export class LocalStore {
       throw new Error('Không thể hoàn tất gallery rỗng');
     }
     session.status = 'pending';
+    session.workflowStep = 'result';
     session.finishedAt = new Date().toISOString();
+    recordEvent(session, 'session-finished', { workflowStep: 'result' });
     delete session.draft;
     await this.persist();
     return structuredClone(session);
@@ -380,9 +477,11 @@ export class LocalStore {
     }
     try { await fs.rmdir(this.sessionPath(sessionId)); } catch { }
     session.status = 'cancelled';
+    session.workflowStep = 'cancelled';
     session.cancelledAt = new Date().toISOString();
     session.finishedAt = new Date().toISOString();
     delete session.draft;
+    recordEvent(session, 'session-cancelled', { workflowStep: 'cancelled' });
     await this.persist();
     return publicSession(session);
   }
@@ -391,7 +490,29 @@ export class LocalStore {
     const session = this.queue.sessions[sessionId];
     if (!session) return;
     await callback(session);
+    session.updatedAt = new Date().toISOString();
     await this.persist();
+  }
+
+  async recordPrintJob(sessionId, job = {}) {
+    const session = this.queue.sessions[sessionId];
+    if (!session) return null;
+    const value = {
+      id: String(job.id || crypto.randomUUID()),
+      profile: String(job.profile || '4x6-portrait'),
+      copies: Math.max(1, Math.min(10, Math.round(Number(job.copies) || 1))),
+      deviceName: String(job.deviceName || ''),
+      status: ['queued', 'printed', 'failed'].includes(job.status) ? job.status : 'queued',
+      error: job.error ? String(job.error).slice(0, 500) : null,
+      createdAt: String(job.createdAt || new Date().toISOString()),
+      updatedAt: new Date().toISOString()
+    };
+    const existing = (session.printJobs ??= []).find((candidate) => candidate.id === value.id);
+    if (existing) Object.assign(existing, value, { createdAt: existing.createdAt });
+    else session.printJobs.push(value);
+    recordEvent(session, `print-${value.status}`, { printJobId: value.id, copies: value.copies });
+    await this.persist();
+    return structuredClone(value);
   }
 
   pending() {
@@ -406,7 +527,9 @@ export class LocalStore {
       pending: sessions.filter((session) => !isExpired(session) && ['pending', 'retrying', 'uploading'].includes(session.status)).length,
       recoverable: sessions.filter((session) => !isExpired(session) && session.status === 'recoverable').length,
       uploaded: sessions.filter((session) => session.status === 'uploaded').length,
-      failed: sessions.filter((session) => session.status === 'failed').length,
+      failed: sessions.filter((session) => session.status === 'failed' || (session.cloudflareStatus === 'failed' && !['cancelled', 'uploaded'].includes(session.status))).length,
+      cloudPending: sessions.filter((session) => !isExpired(session) && ['pending', 'uploading', 'retrying'].includes(session.cloudflareStatus)).length,
+      cloudFailed: sessions.filter((session) => session.cloudflareStatus === 'failed').length,
       localBytes: sessions.flatMap((session) => session.items || []).filter((item) => !item.deletedAt).reduce((sum, item) => sum + (item.size || 0), 0)
     };
   }
@@ -417,11 +540,13 @@ export class LocalStore {
     return session;
   }
 
-  async cleanup(retentionHours) {
+  async cleanup(retentionHours, { requireCloudflare = false } = {}) {
+    if (Number(retentionHours) < 0) return 0;
     const cutoff = Date.now() - Math.max(0, retentionHours) * 3600000;
     let removed = 0;
     for (const session of Object.values(this.queue.sessions)) {
       if (session.status !== 'uploaded' || !session.uploadedAt || Date.parse(session.uploadedAt) > cutoff) continue;
+      if (requireCloudflare && !['uploaded', 'deleted'].includes(session.cloudflareStatus)) continue;
       for (const item of session.items) {
         if (item.deletedAt || item.status !== 'uploaded' || !item.checksumVerified) continue;
         const protectsResult = session.result?.artifactId === item.id && !session.result.acknowledgedAt && !isExpired(session);
@@ -436,11 +561,50 @@ export class LocalStore {
     return removed;
   }
 
+  async cleanupByAge(maxAgeDays) {
+    if (!Number.isFinite(maxAgeDays) || maxAgeDays < 0) return 0;
+    const cutoff = Date.now() - maxAgeDays * 86400000;
+    // Statuses that must never be cleaned up — data may still be needed for
+    // upload, retry, recovery, reprint or user download.
+    const protectedStatuses = new Set([
+      'capturing', 'recoverable', 'pending', 'uploading', 'retrying', 'failed'
+    ]);
+    let removed = 0;
+    for (const session of Object.values(this.queue.sessions)) {
+      const createdMs = Date.parse(session.createdAt);
+      if (!createdMs || createdMs > cutoff) continue;
+      // Never delete sessions that may still need upload/retry/recovery
+      if (protectedStatuses.has(session.status)) continue;
+      // Only clean up sessions that are fully uploaded and acknowledged
+      if (session.status === 'uploaded') {
+        // If cloudflare upload is still pending/retrying, skip
+        if (session.cloudflareStatus && !['uploaded', 'deleted'].includes(session.cloudflareStatus)) continue;
+        // If result has not been acknowledged and session is not expired, skip
+        if (session.result?.artifactId && !session.result.acknowledgedAt && !isExpired(session)) continue;
+      }
+      for (const item of session.items) {
+        if (item.deletedAt) continue;
+        try { await fs.unlink(item.path); } catch (error) { if (error.code !== 'ENOENT') continue; }
+        item.deletedAt = new Date().toISOString();
+        removed += 1;
+      }
+      try { await fs.rmdir(this.sessionPath(session.id)); } catch { }
+    }
+    if (removed) await this.persist();
+    return removed;
+  }
+
   async persist() {
     const operation = this.writeChain.catch(() => { }).then(async () => {
       await fs.mkdir(this.root, { recursive: true });
       const temporary = `${this.queuePath}.tmp`;
-      await fs.writeFile(temporary, JSON.stringify(this.queue, null, 2), 'utf8');
+      const handle = await fs.open(temporary, 'w');
+      try {
+        await handle.writeFile(JSON.stringify(this.queue, null, 2), 'utf8');
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
       await fs.rename(temporary, this.queuePath);
     });
     this.writeChain = operation.catch(() => { });

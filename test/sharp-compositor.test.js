@@ -89,6 +89,21 @@ async function decodedPixel(bytes, xFraction, yFraction) {
   return Array.from(data.subarray(offset, offset + 3));
 }
 
+async function previewFinalMeanDifference(preview, final) {
+  const previewPixels = await sharp(Buffer.from(preview.bytes)).removeAlpha().raw().toBuffer();
+  const finalPixels = await sharp(Buffer.from(final.bytes))
+    .resize(preview.width, preview.height, { fit: 'fill' })
+    .removeAlpha()
+    .raw()
+    .toBuffer();
+  assert.equal(previewPixels.length, finalPixels.length);
+  let difference = 0;
+  for (let index = 0; index < previewPixels.length; index += 1) {
+    difference += Math.abs(previewPixels[index] - finalPixels[index]);
+  }
+  return difference / previewPixels.length;
+}
+
 test('Sharp compositor crops original JPEG with cover and writes portrait 600 DPI output', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'photobooth-compositor-'));
   try {
@@ -170,6 +185,15 @@ test('Sharp preview and final share pan geometry, rotation, and topmost frame ov
     const leftPreview = await compositor.render({ ...base, transforms: panLeft, preview: true });
     const rightPreview = await compositor.render({ ...base, transforms: panRight, preview: true });
     const leftFinal = await compositor.render({ ...base, transforms: panLeft });
+    const mirroredPreview = await compositor.render({
+      ...base,
+      transforms: { [item.id]: { panX: 50, panY: 50, zoom: 1, rotation: 0, mirrored: true } },
+      preview: true
+    });
+    const mirroredFinal = await compositor.render({
+      ...base,
+      transforms: { [item.id]: { panX: 50, panY: 50, zoom: 1, rotation: 0, mirrored: true } }
+    });
     const rotated = await compositor.render({
       ...base,
       transforms: { [item.id]: { panX: 50, panY: 50, zoom: 1, rotation: 90 } },
@@ -183,6 +207,13 @@ test('Sharp preview and final share pan geometry, rotation, and topmost frame ov
     assert.ok(rightPreviewCenter[2] > 220 && rightPreviewCenter[0] < 35);
     assert.ok(leftFinalCenter[0] > 220 && leftFinalCenter[2] < 35);
 
+    for (const result of [mirroredPreview, mirroredFinal]) {
+      const mirroredLeft = await decodedPixel(result.bytes, .25, .5);
+      const mirroredRight = await decodedPixel(result.bytes, .75, .5);
+      assert.ok(mirroredLeft[2] > 200 && mirroredLeft[0] < 55);
+      assert.ok(mirroredRight[0] > 200 && mirroredRight[2] < 55);
+    }
+
     const rotatedTop = await decodedPixel(rotated.bytes, .5, .2);
     const rotatedBottom = await decodedPixel(rotated.bytes, .5, .8);
     assert.ok(rotatedTop[0] > 200 && rotatedTop[2] < 55);
@@ -192,6 +223,53 @@ test('Sharp preview and final share pan geometry, rotation, and topmost frame ov
     const holeEdgePixel = await decodedPixel(leftPreview.bytes, .09, .5);
     assert.ok(overlayPixel.every((channel) => channel < 35));
     assert.ok(holeEdgePixel[0] > 180, 'expanded photo should fill the transparent hole without a background seam');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('Sharp preview stays visually aligned with the 600 DPI print render', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'photobooth-preview-parity-'));
+  try {
+    const frame = await createFrame(root);
+    const { store, session, item } = await createSessionWithPhoto(root, await splitJpeg());
+    const compositor = createCompositor(store, managerFor(frame, '4x6-portrait'), { qrEnabled: true });
+    const qrBytes = await sharp({ create: { width: 21, height: 21, channels: 3, background: '#ffffff' } })
+      .composite([{ input: Buffer.from('<svg width="21" height="21" xmlns="http://www.w3.org/2000/svg"><path d="M0 0h9v9H0zM12 0h9v9h-9zM0 12h9v9H0zM12 12h3v3h-3zM18 18h3v3h-3z" fill="#000"/></svg>') }])
+      .png()
+      .toBuffer();
+    const payload = {
+      sessionId: session.id,
+      artifactIds: [item.id],
+      frameId: 'frame',
+      qrDataUrl: `data:image/png;base64,${qrBytes.toString('base64')}`,
+      transforms: { [item.id]: { panX: 82, panY: 18, zoom: 1.65, rotation: 90, mirrored: true } }
+    };
+
+    const preview = await compositor.render({ ...payload, preview: true });
+    const final = await compositor.render(payload);
+    assert.equal(final.width / preview.width, 3);
+    assert.equal(final.height / preview.height, 3);
+    assert.ok(await previewFinalMeanDifference(preview, final) < 8);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('Sharp compositor applies LUT only to photos and keeps preview equal to final output', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'photobooth-lut-parity-'));
+  try {
+    const frame = await createFrame(root);
+    const { store, session, item } = await createSessionWithPhoto(root, await solidJpeg(600, 400, '#d36b43'));
+    const compositor = createCompositor(store, managerFor(frame, '4x6-portrait'), { previewResolution: 1200, targetResolution: 1200 });
+    const base = { sessionId: session.id, artifactIds: [item.id], frameId: 'frame', lutId: 'cinematic' };
+    const preview = await compositor.render({ ...base, preview: true });
+    const final = await compositor.render(base);
+    const graded = await decodedPixel(preview.bytes, .5, .5);
+    const border = await decodedPixel(preview.bytes, .02, .02);
+    assert.ok(Math.abs(graded[0] - 211) + Math.abs(graded[1] - 107) + Math.abs(graded[2] - 67) > 12);
+    assert.ok(border.every((channel) => channel < 35), 'frame artwork must not receive the photo LUT');
+    assert.ok(await previewFinalMeanDifference(preview, final) < 1);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

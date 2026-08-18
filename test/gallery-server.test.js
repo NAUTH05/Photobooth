@@ -35,7 +35,7 @@ test('serves a token-protected session gallery and its image', async () => {
     const token = encodeURIComponent(store.queue.sessions[session.id].galleryToken);
     const gallery = await request(`http://127.0.0.1:${port}/s/${session.id}?t=${token}`);
     assert.equal(gallery.status, 200);
-    assert.match(gallery.body.toString(), /Khoảnh khắc/);
+    assert.match(gallery.body.toString(), /Khoảnh khắc|Mang nụ cười/);
     const api = await request(`http://127.0.0.1:${port}/api/public/sessions/${session.id}?t=${token}`);
     assert.equal(api.status, 200);
     const publicItems = JSON.parse(api.body).items;

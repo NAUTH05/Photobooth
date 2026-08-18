@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { containRect, coverCropRect, expandRect, outputDimensions } from '../src/shared/image-layout.js';
+import { containRect, coverCropRect, expandRect, normalizePhotoTransform, outputDimensions } from '../src/shared/image-layout.js';
 
 
 test('cover crop uses original dimensions without distortion for 6000x4000 JPEG', () => {
@@ -15,6 +15,12 @@ test('cover crop supports zoom and edge pan for 2K-class input', () => {
   assert.ok(crop.left > 0);
   assert.equal(crop.top, 0);
   assert.ok(crop.width < 2048);
+});
+
+test('photo transform normalizes the mirror flag', () => {
+  assert.equal(normalizePhotoTransform().mirrored, false);
+  assert.equal(normalizePhotoTransform({ mirrored: true }).mirrored, true);
+  assert.equal(normalizePhotoTransform({ mirrored: 'true' }).mirrored, false);
 });
 
 test('output dimensions preserve portrait print profile', () => {

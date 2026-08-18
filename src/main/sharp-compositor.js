@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import sharp from 'sharp';
 import { coverCropRect, expandRect, normalizePhotoTransform, scaleRect } from '../shared/image-layout.js';
 import { DEFAULT_FOOTER_HEIGHT, outputProfile, PRINT_HEIGHT, PRINT_WIDTH, resolvePhotoSlots } from '../shared/photo-layout.js';
+import { applyLutBuffer } from './lut-processor.js';
 
 function integerRect(rect) {
   return {
@@ -26,14 +27,15 @@ function svgOverlay(frame, width, height, branding) {
 }
 
 export class SharpCompositor {
-  constructor(localStore, frameManager, configStore) {
+  constructor(localStore, frameManager, configStore, lutManager = null) {
     this.localStore = localStore;
     this.frameManager = frameManager;
     this.configStore = configStore;
+    this.lutManager = lutManager;
     this.overlayCache = new Map();
   }
 
-  async render({ sessionId, artifactIds, frameId, transforms = {}, qrDataUrl = '', preview = false, save = false }) {
+  async render({ sessionId, artifactIds, frameId, transforms = {}, lutId = 'natural', qrDataUrl = '', preview = false, save = false }) {
     if (!Array.isArray(artifactIds) || artifactIds.length < 1 || artifactIds.length > 8) throw new Error('Số ảnh ghép không hợp lệ');
     if (!preview) {
       if (artifactIds.some((artifactId) => typeof artifactId !== 'string' || !artifactId) || new Set(artifactIds).size !== artifactIds.length) {
@@ -41,6 +43,7 @@ export class SharpCompositor {
       }
     }
     const config = this.configStore.get();
+    const selectedLut = this.lutManager?.resolve(lutId) || lutId;
     const frame = await this.frameManager.resolve(frameId);
     if (!preview && Number(frame.slotCount) !== artifactIds.length && frame.slotCount !== 'any') throw new Error('Số ảnh không khớp frame');
     const target = preview ? Number(config.composite.previewResolution) || 1200 : Number(config.composite.targetResolution) || 3600;
@@ -89,6 +92,8 @@ export class SharpCompositor {
           })
           .png()
           .toBuffer();
+        if (transform.mirrored) input = await sharp(input).flop().png().toBuffer();
+        input = await applyLutBuffer(input, selectedLut, { format: 'png' });
       } else {
         const targetWidth = rotatedQuarter ? placement.height : placement.width;
         const targetHeight = rotatedQuarter ? placement.width : placement.height;
@@ -99,6 +104,8 @@ export class SharpCompositor {
         if (rotation % 90 !== 0) {
           input = await sharp(input).resize(placementWidth, placementHeight, { fit: 'cover' }).toBuffer();
         }
+        if (transform.mirrored) input = await sharp(input).flop().jpeg({ quality: 100, chromaSubsampling: '4:4:4' }).toBuffer();
+        input = await applyLutBuffer(input, selectedLut, { format: 'jpeg' });
       }
       composites.push({ input, left: Math.round(placement.x), top: Math.round(placement.y) });
     }

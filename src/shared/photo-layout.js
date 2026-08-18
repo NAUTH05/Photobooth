@@ -75,10 +75,23 @@ function validSlotSet(slots, width, height) {
   return true;
 }
 
+function normalizeCategory(value) {
+  const category = String(value || '4x6-portrait');
+  switch (category) {
+    case '2x6':
+    case '2x6-strip':
+      return '2x6';
+    case '4x6-landscape':
+      return '4x6-landscape';
+    default:
+      return '4x6-portrait';
+  }
+}
+
 export function outputProfile(frame, targetResolution = 3600) {
   const target = Math.max(1200, Math.min(7200, Math.round(Number(targetResolution) || 3600)));
-  const category = String(frame?.category || '4x6-portrait');
-  if (category === '2x6' || frame?.layout === '2x6') return { kind: '2x6', width: Math.round(target * 2 / 3), height: target, stripWidth: Math.round(target / 3) };
+  const category = normalizeCategory(frame?.category || frame?.layout);
+  if (category === '2x6') return { kind: '2x6', width: Math.round(target * 2 / 3), height: target, stripWidth: Math.round(target / 3) };
   if (category === '4x6-landscape') return { kind: '4x6-landscape', width: target, height: Math.round(target * 2 / 3) };
   return { kind: '4x6-portrait', width: Math.round(target * 2 / 3), height: target };
 }
