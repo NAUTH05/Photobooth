@@ -19,6 +19,7 @@ NEW_FIX.txt
 .codegraph/
 src.zip
 full.diff
-web/.next/
-web/node_modules/
+# Website album là repo git riêng, deploy thẳng lên Heroku (remote `heroku`).
+# Repo booth không theo dõi nó để tránh gitlink rỗng khi clone.
+web/
 
