@@ -1,11 +1,15 @@
 const RETRYABLE_HTTP_STATUSES = new Set([408, 409, 425, 429]);
 
 export class RequestError extends Error {
-  constructor(message, { status = null, retryable = null, cause } = {}) {
+  constructor(message, { status = null, retryable = null, cause, body = '', stage = '' } = {}) {
     super(message, cause ? { cause } : undefined);
     this.name = 'RequestError';
     this.status = Number.isFinite(Number(status)) ? Number(status) : null;
     this.retryable = retryable == null ? isRetryableStatus(this.status) : Boolean(retryable);
+    // Raw server response and the step that failed, kept so the session manager
+    // can show the operator exactly what the gallery server answered.
+    this.body = String(body || '').slice(0, 2000);
+    this.stage = String(stage || '');
   }
 }
 

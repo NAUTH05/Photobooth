@@ -98,6 +98,8 @@ export class LocalStore {
       session.items ??= [];
       session.printJobs ??= [];
       session.events ??= [];
+      session.cloudflareErrors ??= [];
+      session.archived = Boolean(session.archived);
       session.updatedAt ??= session.createdAt;
       session.workflowStep ??= session.draft?.step || (session.finishedAt ? 'result' : 'capture');
       const expectedDirectory = this.sessionPath(session.id);
@@ -534,10 +536,119 @@ export class LocalStore {
     };
   }
 
-  findSession(sessionId, galleryToken) {
+  // ——— Upload session manager ———————————————————————————————————————
+
+  // Rolls the session's local status and its Cloudflare status into the single
+  // state the manager screen shows in its badge.
+  uploadStateOf(session) {
+    if (session.status === 'cancelled') return 'cancelled';
+    if (session.cloudflareStatus === 'cancelled') return 'cancelled';
+    if (session.cloudflareStatus === 'deleted') return 'deleted';
+    if (session.cloudflareStatus === 'uploaded') return 'uploaded';
+    if (session.cloudflareStatus === 'failed') return 'failed';
+    if (session.cloudflareStatus === 'uploading') return 'uploading';
+    if (session.cloudflareStatus === 'retrying') return 'retrying';
+    if (isExpired(session)) return 'expired';
+    if (!session.finishedAt) return session.status === 'recoverable' ? 'recoverable' : 'capturing';
+    return 'pending';
+  }
+
+  uploadSessionView(sessionId) {
     const session = this.queue.sessions[sessionId];
-    if (!session || !session.galleryToken || session.galleryToken !== galleryToken) return null;
-    return session;
+    if (!session) return null;
+    const items = (session.items || []).filter((item) => !item.deletedAt);
+    const uploadedItems = items.filter((item) => item.cloudflareStatus === 'uploaded');
+    const skippedItems = items.filter((item) => item.cloudflareStatus === 'skipped');
+    const totalBytes = items.reduce((sum, item) => sum + (item.size || 0), 0);
+    return {
+      id: session.id,
+      folderName: session.folderName || session.id,
+      mode: session.mode,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      finishedAt: session.finishedAt || null,
+      expiresAt: session.expiresAt || null,
+      expired: isExpired(session),
+      status: session.status,
+      uploadState: this.uploadStateOf(session),
+      cloudflareStatus: session.cloudflareStatus || null,
+      cloudflareDeletionStatus: session.cloudflareDeletionStatus || null,
+      archived: Boolean(session.archived),
+      archivedAt: session.archivedAt || null,
+      attempts: session.cloudflareAttempts || 0,
+      nextAttemptAt: session.cloudflareNextAttemptAt || null,
+      uploadedAt: session.cloudflareUploadedAt || session.uploadedAt || null,
+      galleryUrl: session.cloudflareGalleryUrl || null,
+      lastError: session.cloudflareLastError || null,
+      itemCount: items.length,
+      uploadedCount: uploadedItems.length,
+      skippedCount: skippedItems.length,
+      pendingCount: items.length - uploadedItems.length - skippedItems.length,
+      totalBytes,
+      uploadedBytes: uploadedItems.reduce((sum, item) => sum + (item.size || 0), 0),
+      progress: items.length ? (uploadedItems.length + skippedItems.length) / items.length : 0,
+      errorCount: (session.cloudflareErrors || []).length,
+      printCount: (session.printJobs || []).filter((job) => job.status === 'printed').reduce((sum, job) => sum + (job.copies || 0), 0)
+    };
+  }
+
+  // Every finished session plus anything still mid-capture, newest first, so the
+  // manager can show what is queued, stuck, done or parked.
+  uploadSessions({ includeArchived = true } = {}) {
+    return Object.values(this.queue.sessions)
+      .filter((session) => includeArchived || !session.archived)
+      .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
+      .map((session) => this.uploadSessionView(session.id));
+  }
+
+  // Adds what the list view leaves out: per-file upload state, whether the file
+  // is still on disk, and the raw server errors behind a failure.
+  async uploadSessionDetail(sessionId) {
+    const session = this.queue.sessions[sessionId];
+    if (!session) throw new Error('Không tìm thấy phiên này');
+    const directory = this.sessionPath(sessionId);
+    const directoryExists = await fs.stat(directory).then((stats) => stats.isDirectory()).catch(() => false);
+    const items = [];
+    for (const item of session.items || []) {
+      if (item.deletedAt) continue;
+      const onDisk = await fs.stat(item.path).then((stats) => (stats.isFile() ? stats.size : null)).catch(() => null);
+      items.push({
+        id: item.id,
+        kind: item.kind,
+        filename: item.filename,
+        size: item.size || 0,
+        createdAt: item.createdAt,
+        status: item.status || 'pending',
+        cloudflareStatus: item.cloudflareStatus || 'pending',
+        cloudflareUploadedAt: item.cloudflareUploadedAt || null,
+        skipReason: item.cloudflareSkipReason || null,
+        missing: onDisk === null,
+        diskSize: onDisk,
+        sizeMismatch: onDisk !== null && Number(item.size) !== onDisk
+      });
+    }
+    return {
+      ...this.uploadSessionView(sessionId),
+      directory,
+      directoryExists,
+      missingCount: items.filter((item) => item.missing).length,
+      items,
+      errors: structuredClone(session.cloudflareErrors || []).reverse(),
+      events: structuredClone(session.events || []).slice(-40).reverse(),
+      printJobs: structuredClone(session.printJobs || [])
+    };
+  }
+
+  // Parking a session hides it from the active list and keeps the uploader from
+  // picking it up, without deleting a single photo.
+  async setArchived(sessionId, archived) {
+    const session = this.queue.sessions[sessionId];
+    if (!session) throw new Error('Không tìm thấy phiên này');
+    session.archived = Boolean(archived);
+    session.archivedAt = session.archived ? new Date().toISOString() : null;
+    recordEvent(session, session.archived ? 'session-archived' : 'session-unarchived');
+    await this.persist();
+    return this.uploadSessionView(sessionId);
   }
 
   async cleanup(retentionHours, { requireCloudflare = false } = {}) {
@@ -573,6 +684,8 @@ export class LocalStore {
     for (const session of Object.values(this.queue.sessions)) {
       const createdMs = Date.parse(session.createdAt);
       if (!createdMs || createdMs > cutoff) continue;
+      // The operator explicitly parked archived sessions — never sweep their files.
+      if (session.archived) continue;
       // Never delete sessions that may still need upload/retry/recovery
       if (protectedStatuses.has(session.status)) continue;
       // Only clean up sessions that are fully uploaded and acknowledged

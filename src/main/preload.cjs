@@ -44,12 +44,20 @@ contextBridge.exposeInMainWorld('photobooth', {
     create: (payload) => ipcRenderer.invoke('composite:create', payload)
   },
   gallery: {
-    url: (sessionId) => ipcRenderer.invoke('gallery:url', sessionId),
-    health: () => ipcRenderer.invoke('gallery:health')
+    url: (sessionId) => ipcRenderer.invoke('gallery:url', sessionId)
   },
   queue: {
     stats: () => ipcRenderer.invoke('queue:stats'),
     retry: () => ipcRenderer.invoke('queue:retry')
+  },
+  uploads: {
+    list: (options) => ipcRenderer.invoke('uploads:list', options),
+    detail: (sessionId) => ipcRenderer.invoke('uploads:detail', sessionId),
+    cancel: (sessionId) => ipcRenderer.invoke('uploads:cancel', sessionId),
+    retry: (sessionId) => ipcRenderer.invoke('uploads:retry', sessionId),
+    archive: (sessionId) => ipcRenderer.invoke('uploads:archive', sessionId),
+    unarchive: (sessionId) => ipcRenderer.invoke('uploads:unarchive', sessionId),
+    reveal: (sessionId) => ipcRenderer.invoke('uploads:reveal', sessionId)
   },
   timelapse: {
     encode: (payload) => ipcRenderer.invoke('timelapse:encode', payload)
@@ -63,5 +71,10 @@ contextBridge.exposeInMainWorld('photobooth', {
     const listener = (_event, value) => callback(value);
     ipcRenderer.on('upload:status', listener);
     return () => ipcRenderer.removeListener('upload:status', listener);
+  },
+  onBackgroundError: (callback) => {
+    const listener = (_event, value) => callback(value);
+    ipcRenderer.on('app:background-error', listener);
+    return () => ipcRenderer.removeListener('app:background-error', listener);
   }
 });

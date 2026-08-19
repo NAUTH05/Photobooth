@@ -159,3 +159,73 @@ test('cleanupByAge removes local files older than the specified number of days',
   assert.equal(await store.cleanupByAge(7), 0);
   assert.equal(await store.cleanupByAge(-1), 0);
 });
+
+test('uploadSessions lists every session newest first with its rolled-up upload state', async (t) => {
+  const { root, store } = await temporaryStore('photobooth-upload-list-');
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const older = await store.createSession('photo');
+  await store.saveArtifact({ sessionId: older.id, kind: 'photo-original', extension: 'jpg', bytes: jpeg });
+  await store.finishSession(older.id);
+  const newer = await store.createSession('photo');
+  await store.saveArtifact({ sessionId: newer.id, kind: 'photo-original', extension: 'jpg', bytes: jpeg });
+  await store.mutate(older.id, (value) => { value.createdAt = new Date(Date.now() - 60000).toISOString(); });
+
+  const sessions = store.uploadSessions();
+  assert.deepEqual(sessions.map((session) => session.id), [newer.id, older.id]);
+  assert.equal(sessions[0].uploadState, 'capturing');
+  assert.equal(sessions[1].uploadState, 'pending');
+  assert.equal(sessions[1].itemCount, 1);
+  assert.equal(sessions[1].uploadedCount, 0);
+  assert.equal(sessions[1].progress, 0);
+
+  await store.mutate(older.id, (value) => {
+    value.cloudflareStatus = 'uploaded';
+    value.items[0].cloudflareStatus = 'uploaded';
+  });
+  const uploaded = store.uploadSessions().find((session) => session.id === older.id);
+  assert.equal(uploaded.uploadState, 'uploaded');
+  assert.equal(uploaded.progress, 1);
+});
+
+test('uploadSessionDetail reports which files vanished from disk', async (t) => {
+  const { root, store } = await temporaryStore('photobooth-upload-detail-');
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const session = await store.createSession('photo');
+  const kept = await store.saveArtifact({ sessionId: session.id, kind: 'photo-original', extension: 'jpg', bytes: jpeg });
+  const lost = await store.saveArtifact({ sessionId: session.id, kind: 'photo-strip', extension: 'jpg', bytes: jpeg, profile: '4x6-portrait' });
+  await store.finishSession(session.id);
+  await fs.rm(store.queue.sessions[session.id].items.find((item) => item.id === lost.id).path);
+
+  const detail = await store.uploadSessionDetail(session.id);
+  assert.equal(detail.directoryExists, true);
+  assert.equal(detail.items.length, 2);
+  assert.equal(detail.missingCount, 1);
+  assert.equal(detail.items.find((item) => item.id === kept.id).missing, false);
+  assert.equal(detail.items.find((item) => item.id === lost.id).missing, true);
+  assert.deepEqual(detail.errors, []);
+  assert.ok(detail.events.some((event) => event.type === 'session-finished'));
+  await assert.rejects(store.uploadSessionDetail('missing-session'), /Không tìm thấy phiên/);
+});
+
+test('archived sessions are parked and never swept by the age cleanup', async (t) => {
+  const { root, store } = await temporaryStore('photobooth-upload-archive-');
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const session = await store.createSession('photo');
+  const item = await store.saveArtifact({ sessionId: session.id, kind: 'photo-original', extension: 'jpg', bytes: jpeg });
+  await store.mutate(session.id, (value) => {
+    value.createdAt = new Date(Date.now() - 8 * 86400000).toISOString();
+    value.status = 'cancelled';
+  });
+
+  const archived = await store.setArchived(session.id, true);
+  assert.equal(archived.archived, true);
+  assert.equal(store.uploadSessions({ includeArchived: false }).length, 0);
+  assert.equal(store.uploadSessions().length, 1);
+  assert.equal(await store.cleanupByAge(7), 0);
+  assert.equal((await fs.stat(store.queue.sessions[session.id].items.find((candidate) => candidate.id === item.id).path)).isFile(), true);
+  assert.ok(store.queue.sessions[session.id].events.some((event) => event.type === 'session-archived'));
+
+  await store.setArchived(session.id, false);
+  assert.equal(store.queue.sessions[session.id].archivedAt, null);
+  assert.equal(await store.cleanupByAge(7), 1);
+});

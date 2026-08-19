@@ -20,6 +20,8 @@ const state = {
   printCopies: 1, zoomScale: 1, zoomTranslateX: 0, zoomTranslateY: 0, isZoomDragging: false, zoomDragStartX: 0, zoomDragStartY: 0,
   zoomReturnFocus: null, recoveryShotUrls: new Set(), captureGeneration: 0, navigatedFromSessions: false, lutId: 'natural',
   luts: LUT_PRESETS.map(({ table: _table, ...lut }) => lut), lutPreviewUrls: new Map(), lutPreviewGeneration: 0,
+  uploads: { sessions: [], detail: null, selectedId: '', filter: 'active', autoRefresh: true, timer: null, busy: false },
+  backgroundErrorUnsubscribe: null,
 };
 
 function availableLut(value = state.lutId) {
@@ -109,6 +111,12 @@ async function refreshStats() {
   pill.classList.toggle('error', stats.failed > 0 || stats.cloudFailed > 0);
   pill.querySelector('span').textContent = (stats.pending || stats.cloudPending) ? `${Math.max(stats.pending, stats.cloudPending)} bộ ảnh đang lưu nè~` : 'Mọi ảnh đã an toàn ✨';
   $('#queueStats').innerHTML = `Đang lưu album online: <b>${stats.cloudPending || 0}</b><br>Có thể tiếp tục: <b>${stats.recoverable || 0}</b><br>Đã lưu xong: <b>${stats.uploaded}</b><br>Dung lượng trên máy: <b>${(stats.localBytes / 1048576).toFixed(1)} MB</b>`;
+  const waiting = Math.max(stats.pending || 0, stats.cloudPending || 0) + (stats.cloudFailed || 0);
+  const counter = $('#openUploadsCount');
+  if (counter) {
+    counter.textContent = String(waiting);
+    counter.classList.toggle('alert', (stats.cloudFailed || 0) > 0);
+  }
 }
 
 async function loadFrames(force = false) {
@@ -829,7 +837,9 @@ async function composePhotoStrip(shots, frame = state.selectedFrame, qrDataUrl =
     context.fillStyle = label.color;
     context.font = '700 32px Segoe UI'; context.fillText(state.config.branding.name, label.x, label.y, label.maxWidth);
     context.font = '400 19px Nunito'; context.fillText(new Date().toLocaleString('vi-VN'), label.x, label.y + 48, label.maxWidth);
-    context.font = '600 15px Segoe UI'; context.fillText('QUÉT QR ĐỂ XEM ALBUM', label.x, label.y + 92, label.maxWidth);
+    if (qrImage) {
+      context.font = '600 15px Segoe UI'; context.fillText('QUÉT QR ĐỂ XEM ALBUM', label.x, label.y + 92, label.maxWidth);
+    }
   }
   const quality = Math.max(.01, Math.min(1, (Number(composite.jpegQuality) || 95) / 100));
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
@@ -1568,6 +1578,13 @@ function updateCropModalLayout() {
 
 async function showQr(link) {
   const card = $('#qrCard'); card.innerHTML = '';
+  if (!link) {
+    // Không có album online thì cũng không có link nào để quét.
+    const note = document.createElement('small');
+    note.textContent = 'Album online chưa được bật nên chưa có mã QR nha~';
+    card.append(note);
+    return;
+  }
   const canvas = document.createElement('canvas'); card.append(canvas);
   await QRCode.toCanvas(canvas, link, { width: 180, margin: 1, color: { dark: '#322b2d', light: '#ffffff' } });
   const label = document.createElement('small');
@@ -1644,8 +1661,12 @@ async function openSettings() {
     if (field.type === 'checkbox') field.checked = Boolean(value); else field.value = value ?? '';
   }
   await listCameras(); await refreshStats();
-  const backend = await window.photobooth.gallery.health();
-  $('#backendHealth').textContent = backend.ok ? `Hoạt động bình thường · cổng ${backend.port}` : 'Chưa sẵn sàng nè';
+  const cloud = state.config.cloudflare ?? {};
+  let albumStatus = 'Album online chưa được bật nè';
+  if (cloud.enabled && cloud.baseUrl) {
+    try { albumStatus = `Đang dùng ${new URL(cloud.baseUrl).host}`; } catch { albumStatus = cloud.baseUrl; }
+  }
+  $('#backendHealth').textContent = albumStatus;
   dialog.showModal();
 }
 
@@ -1714,6 +1735,509 @@ function applyBranding() {
     ? 'Gói nụ cười mang về nha~'
     : state.config.branding.tagline;
   document.documentElement.style.setProperty('--accent', state.config.branding.accent);
+}
+
+// ——— Upload session manager ————————————————————————————————————————————
+
+const UPLOAD_STATES = {
+  capturing: { label: 'Đang chụp', tone: 'idle' },
+  recoverable: { label: 'Chưa hoàn tất', tone: 'warn' },
+  pending: { label: 'Đang chờ upload', tone: 'queue' },
+  uploading: { label: 'Đang upload', tone: 'busy' },
+  retrying: { label: 'Đang thử lại', tone: 'warn' },
+  uploaded: { label: 'Đã upload xong', tone: 'ok' },
+  failed: { label: 'Upload lỗi', tone: 'error' },
+  cancelled: { label: 'Đã hủy', tone: 'idle' },
+  deleted: { label: 'Đã xóa trên cloud', tone: 'idle' },
+  expired: { label: 'Đã hết hạn', tone: 'idle' }
+};
+
+const ITEM_KIND_LABELS = {
+  'photo-original': 'Ảnh gốc',
+  'dslr-original': 'Ảnh DSLR',
+  'photo-processed': 'Ảnh hậu kỳ',
+  'photo-strip': 'Ảnh thành phẩm',
+  'photo-thumbnail': 'Ảnh nhỏ',
+  'video-timelapse': 'Video hậu trường'
+};
+
+const ITEM_STATUS_LABELS = {
+  pending: 'Chờ upload',
+  uploaded: 'Đã lên',
+  skipped: 'Bỏ qua',
+  uploading: 'Đang lên'
+};
+
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return `${value} B`;
+  if (value < 1048576) return `${Math.round(value / 1024)} KB`;
+  if (value < 1073741824) return `${(value / 1048576).toFixed(1)} MB`;
+  return `${(value / 1073741824).toFixed(2)} GB`;
+}
+
+function formatWhen(value) {
+  if (!value) return '—';
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? new Date(time).toLocaleString('vi-VN') : '—';
+}
+
+function formatCountdown(value) {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return '';
+  const seconds = Math.round((time - Date.now()) / 1000);
+  if (seconds <= 0) return 'ngay bây giờ';
+  if (seconds < 60) return `sau ${seconds} giây`;
+  if (seconds < 3600) return `sau ${Math.round(seconds / 60)} phút`;
+  return `sau ${Math.round(seconds / 3600)} giờ`;
+}
+
+function uploadFilterMatches(session, filter) {
+  if (filter === 'all') return true;
+  if (filter === 'archived') return session.archived;
+  if (session.archived) return false;
+  if (filter === 'active') return ['pending', 'uploading', 'retrying'].includes(session.uploadState);
+  if (filter === 'failed') return session.uploadState === 'failed' || session.skippedCount > 0 || Boolean(session.lastError);
+  if (filter === 'uploaded') return session.uploadState === 'uploaded';
+  return true;
+}
+
+function badge(text, tone) {
+  const element = document.createElement('span');
+  element.className = `upload-badge tone-${tone}`;
+  element.textContent = text;
+  return element;
+}
+
+async function openUploadsScreen() {
+  $('#settingsDialog')?.close();
+  showScreen('uploadsScreen');
+  await refreshUploads();
+  startUploadsAutoRefresh();
+}
+
+function closeUploadsScreen() {
+  stopUploadsAutoRefresh();
+  showScreen('homeScreen');
+}
+
+function startUploadsAutoRefresh() {
+  stopUploadsAutoRefresh();
+  if (!state.uploads.autoRefresh) return;
+  state.uploads.timer = setInterval(() => {
+    if (!$('#uploadsScreen').classList.contains('active')) { stopUploadsAutoRefresh(); return; }
+    refreshUploads({ silent: true }).catch(() => { });
+  }, 4000);
+}
+
+function stopUploadsAutoRefresh() {
+  if (state.uploads.timer) clearInterval(state.uploads.timer);
+  state.uploads.timer = null;
+}
+
+async function refreshUploads({ silent = false } = {}) {
+  const list = $('#uploadsList');
+  if (!silent && !state.uploads.sessions.length) list.textContent = 'Đang đọc hàng đợi…';
+  try {
+    state.uploads.sessions = await window.photobooth.uploads.list({ includeArchived: true });
+  } catch (error) {
+    list.replaceChildren();
+    const failure = document.createElement('div');
+    failure.className = 'uploads-empty';
+    failure.textContent = `Chưa đọc được hàng đợi: ${error.message}`;
+    list.append(failure);
+    return;
+  }
+  renderUploadsSummary();
+  renderUploadsList();
+  if (state.uploads.selectedId) await loadUploadDetail(state.uploads.selectedId, { silent: true });
+}
+
+function renderUploadsSummary() {
+  const sessions = state.uploads.sessions;
+  const active = sessions.filter((item) => uploadFilterMatches(item, 'active'));
+  const failed = sessions.filter((item) => uploadFilterMatches(item, 'failed'));
+  const uploaded = sessions.filter((item) => uploadFilterMatches(item, 'uploaded'));
+  const archived = sessions.filter((item) => item.archived);
+  const pendingBytes = active.reduce((sum, item) => sum + Math.max(0, item.totalBytes - item.uploadedBytes), 0);
+
+  const cards = [
+    { label: 'Phiên đang upload', value: String(active.length), hint: pendingBytes ? `còn ${formatBytes(pendingBytes)}` : 'hàng đợi trống' },
+    { label: 'Phiên có lỗi', value: String(failed.length), hint: failed.length ? 'chạm để xem chi tiết' : 'không có lỗi nào' },
+    { label: 'Đã lên web', value: String(uploaded.length), hint: `${sessions.length} phiên trên máy` },
+    { label: 'Đang lưu trữ', value: String(archived.length), hint: 'tạm dừng upload' }
+  ];
+  const container = $('#uploadsSummary');
+  container.replaceChildren();
+  for (const card of cards) {
+    const element = document.createElement('div');
+    element.className = 'uploads-stat';
+    const value = document.createElement('strong');
+    value.textContent = card.value;
+    const label = document.createElement('span');
+    label.textContent = card.label;
+    const hint = document.createElement('small');
+    hint.textContent = card.hint;
+    element.append(value, label, hint);
+    container.append(element);
+  }
+
+  const counts = { active: active.length, failed: failed.length, uploaded: uploaded.length, archived: archived.length, all: sessions.length };
+  for (const button of $$('#uploadsFilters .uploads-filter')) {
+    const filter = button.dataset.filter;
+    button.classList.toggle('active', filter === state.uploads.filter);
+    button.querySelector('span').textContent = String(counts[filter] ?? 0);
+  }
+}
+
+function renderUploadsList() {
+  const list = $('#uploadsList');
+  list.replaceChildren();
+  const visible = state.uploads.sessions.filter((session) => uploadFilterMatches(session, state.uploads.filter));
+  if (!visible.length) {
+    const empty = document.createElement('div');
+    empty.className = 'uploads-empty';
+    empty.textContent = 'Không có phiên nào trong mục này.';
+    list.append(empty);
+    return;
+  }
+  for (const session of visible) {
+    list.append(uploadRow(session));
+  }
+}
+
+function uploadRow(session) {
+  const meta = UPLOAD_STATES[session.uploadState] || { label: session.uploadState, tone: 'idle' };
+  const row = document.createElement('article');
+  row.className = `upload-row${session.id === state.uploads.selectedId ? ' selected' : ''}${session.archived ? ' archived' : ''}`;
+  row.tabIndex = 0;
+  row.setAttribute('role', 'button');
+
+  const head = document.createElement('div');
+  head.className = 'upload-row-head';
+  const title = document.createElement('div');
+  title.className = 'upload-row-title';
+  const name = document.createElement('strong');
+  name.textContent = session.folderName;
+  const when = document.createElement('small');
+  when.textContent = formatWhen(session.createdAt);
+  title.append(name, when);
+  const badges = document.createElement('div');
+  badges.className = 'upload-row-badges';
+  badges.append(badge(meta.label, meta.tone));
+  if (session.archived) badges.append(badge('Lưu trữ', 'idle'));
+  if (session.skippedCount) badges.append(badge(`${session.skippedCount} tệp bỏ qua`, 'warn'));
+  head.append(title, badges);
+
+  const bar = document.createElement('div');
+  bar.className = 'upload-progress';
+  const fill = document.createElement('i');
+  fill.style.width = `${Math.round(Math.min(1, Math.max(0, session.progress)) * 100)}%`;
+  bar.append(fill);
+
+  const facts = document.createElement('div');
+  facts.className = 'upload-row-facts';
+  const parts = [
+    `${session.uploadedCount}/${session.itemCount} tệp`,
+    formatBytes(session.totalBytes)
+  ];
+  if (session.attempts) parts.push(`${session.attempts} lần thử`);
+  if (session.nextAttemptAt && ['retrying', 'pending'].includes(session.uploadState)) parts.push(`thử lại ${formatCountdown(session.nextAttemptAt)}`);
+  if (session.printCount) parts.push(`đã in ${session.printCount} bản`);
+  facts.textContent = parts.join(' · ');
+
+  row.append(head, bar, facts);
+
+  if (session.lastError) {
+    const error = document.createElement('p');
+    error.className = 'upload-row-error';
+    error.textContent = session.lastError;
+    row.append(error);
+  }
+
+  row.append(uploadRowActions(session));
+  const open = () => selectUploadSession(session.id);
+  row.onclick = open;
+  row.onkeydown = (event) => {
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); }
+  };
+  return row;
+}
+
+function uploadRowActions(session) {
+  const actions = document.createElement('div');
+  actions.className = 'upload-row-actions';
+  const cancellable = ['pending', 'uploading', 'retrying'].includes(session.uploadState);
+  const retryable = Boolean(session.finishedAt) && session.uploadState !== 'uploading'
+    && (session.uploadState !== 'uploaded' || session.skippedCount > 0);
+
+  const buttons = [
+    { key: 'cancel', label: 'Huỷ', enabled: cancellable },
+    { key: 'retry', label: 'Thử lại', enabled: retryable },
+    session.archived
+      ? { key: 'unarchive', label: 'Bỏ lưu trữ', enabled: true }
+      : { key: 'archive', label: 'Lưu trữ', enabled: true },
+    { key: 'reveal', label: 'Mở thư mục', enabled: true }
+  ];
+  for (const spec of buttons) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `upload-action${spec.key === 'cancel' ? ' danger' : ''}`;
+    button.textContent = spec.label;
+    button.disabled = !spec.enabled || state.uploads.busy;
+    button.onclick = (event) => {
+      event.stopPropagation();
+      runUploadAction(spec.key, session).catch((error) => toast(error.message));
+    };
+    actions.append(button);
+  }
+  return actions;
+}
+
+async function runUploadAction(action, session) {
+  if (state.uploads.busy) return;
+  if (action === 'cancel' && !window.confirm(`Huỷ upload phiên ${session.folderName}? Ảnh vẫn còn nguyên trên máy.`)) return;
+  state.uploads.busy = true;
+  renderUploadsList();
+  try {
+    if (action === 'reveal') {
+      const result = await window.photobooth.uploads.reveal(session.id);
+      toast(result.ok ? 'Đã mở thư mục phiên trong File Explorer' : result.error);
+      return;
+    }
+    const messages = {
+      cancel: 'Đã huỷ upload phiên này',
+      retry: 'Đang thử upload lại phiên này…',
+      archive: 'Đã cất phiên vào lưu trữ',
+      unarchive: 'Phiên đã trở lại hàng đợi upload'
+    };
+    await window.photobooth.uploads[action](session.id);
+    toast(messages[action]);
+    await refreshUploads({ silent: true });
+    await refreshStats();
+  } finally {
+    state.uploads.busy = false;
+    renderUploadsList();
+  }
+}
+
+async function selectUploadSession(sessionId) {
+  state.uploads.selectedId = state.uploads.selectedId === sessionId ? '' : sessionId;
+  renderUploadsList();
+  if (!state.uploads.selectedId) {
+    renderUploadDetail(null);
+    return;
+  }
+  await loadUploadDetail(state.uploads.selectedId);
+}
+
+async function loadUploadDetail(sessionId, { silent = false } = {}) {
+  if (!silent) {
+    const panel = $('#uploadsDetail');
+    panel.replaceChildren();
+    const loading = document.createElement('div');
+    loading.className = 'uploads-detail-empty';
+    loading.textContent = 'Đang đọc chi tiết phiên…';
+    panel.append(loading);
+  }
+  try {
+    const detail = await window.photobooth.uploads.detail(sessionId);
+    if (state.uploads.selectedId !== sessionId) return;
+    state.uploads.detail = detail;
+    renderUploadDetail(detail);
+  } catch (error) {
+    if (state.uploads.selectedId !== sessionId) return;
+    renderUploadDetail(null, `Chưa đọc được chi tiết: ${error.message}`);
+  }
+}
+
+function detailRow(label, value) {
+  const row = document.createElement('div');
+  row.className = 'upload-detail-row';
+  const key = document.createElement('span');
+  key.textContent = label;
+  const text = document.createElement('strong');
+  text.textContent = value;
+  row.append(key, text);
+  return row;
+}
+
+function renderUploadDetail(detail, failure = '') {
+  const panel = $('#uploadsDetail');
+  panel.replaceChildren();
+  if (!detail) {
+    const empty = document.createElement('div');
+    empty.className = 'uploads-detail-empty';
+    empty.textContent = failure || 'Chọn một phiên bên cạnh để xem trạng thái từng tệp, lỗi và phản hồi từ server.';
+    panel.append(empty);
+    return;
+  }
+  const meta = UPLOAD_STATES[detail.uploadState] || { label: detail.uploadState, tone: 'idle' };
+
+  const header = document.createElement('div');
+  header.className = 'upload-detail-head';
+  const heading = document.createElement('div');
+  const title = document.createElement('h3');
+  title.textContent = detail.folderName;
+  const subtitle = document.createElement('small');
+  subtitle.textContent = detail.id;
+  heading.append(title, subtitle);
+  header.append(heading, badge(meta.label, meta.tone));
+  panel.append(header);
+
+  const facts = document.createElement('div');
+  facts.className = 'upload-detail-facts';
+  facts.append(
+    detailRow('Bắt đầu', formatWhen(detail.createdAt)),
+    detailRow('Hoàn tất chụp', formatWhen(detail.finishedAt)),
+    detailRow('Upload xong', formatWhen(detail.uploadedAt)),
+    detailRow('Hết hạn', formatWhen(detail.expiresAt)),
+    detailRow('Tệp đã lên', `${detail.uploadedCount}/${detail.itemCount}`),
+    detailRow('Dung lượng', formatBytes(detail.totalBytes)),
+    detailRow('Số lần thử', String(detail.attempts))
+  );
+  if (detail.nextAttemptAt) facts.append(detailRow('Thử lại', formatCountdown(detail.nextAttemptAt)));
+  if (detail.skippedCount) facts.append(detailRow('Tệp bỏ qua', String(detail.skippedCount)));
+  if (detail.missingCount) facts.append(detailRow('Tệp mất trên máy', String(detail.missingCount)));
+  panel.append(facts);
+
+  const folder = document.createElement('p');
+  folder.className = 'upload-detail-path';
+  folder.textContent = detail.directoryExists ? detail.directory : `${detail.directory} (thư mục không còn)`;
+  panel.append(folder);
+
+  if (detail.galleryUrl) {
+    const link = document.createElement('p');
+    link.className = 'upload-detail-path';
+    link.textContent = detail.galleryUrl;
+    panel.append(link);
+  }
+
+  if (detail.lastError) {
+    const alert = document.createElement('div');
+    alert.className = 'upload-detail-alert';
+    alert.textContent = detail.lastError;
+    panel.append(alert);
+  }
+
+  panel.append(uploadDetailSection('Lỗi & phản hồi từ server', uploadErrorList(detail.errors)));
+  panel.append(uploadDetailSection(`Từng tệp (${detail.items.length})`, uploadItemList(detail.items)));
+  panel.append(uploadDetailSection('Lịch sử phiên', uploadEventList(detail.events)));
+}
+
+function uploadDetailSection(title, body) {
+  const section = document.createElement('section');
+  section.className = 'upload-detail-section';
+  const heading = document.createElement('h4');
+  heading.textContent = title;
+  section.append(heading, body);
+  return section;
+}
+
+function uploadErrorList(errors) {
+  const container = document.createElement('div');
+  container.className = 'upload-error-list';
+  if (!errors.length) {
+    const empty = document.createElement('p');
+    empty.className = 'upload-muted';
+    empty.textContent = 'Chưa ghi nhận lỗi nào cho phiên này.';
+    container.append(empty);
+    return container;
+  }
+  for (const entry of errors) {
+    const card = document.createElement('article');
+    card.className = `upload-error${entry.retryable ? '' : ' permanent'}`;
+    const head = document.createElement('div');
+    head.className = 'upload-error-head';
+    const stage = document.createElement('strong');
+    stage.textContent = entry.stage || 'upload';
+    const when = document.createElement('small');
+    when.textContent = formatWhen(entry.at);
+    head.append(stage, when);
+    card.append(head);
+
+    const tags = document.createElement('div');
+    tags.className = 'upload-error-tags';
+    if (entry.status) tags.append(badge(`HTTP ${entry.status}`, entry.status >= 500 ? 'warn' : 'error'));
+    if (entry.code) tags.append(badge(entry.code, 'error'));
+    tags.append(badge(entry.retryable ? 'Sẽ thử lại' : 'Không tự thử lại', entry.retryable ? 'queue' : 'error'));
+    if (entry.filename) tags.append(badge(entry.filename, 'idle'));
+    card.append(tags);
+
+    const message = document.createElement('p');
+    message.className = 'upload-error-message';
+    message.textContent = entry.message;
+    card.append(message);
+
+    if (entry.response) {
+      const response = document.createElement('pre');
+      response.className = 'upload-error-response';
+      response.textContent = entry.response;
+      card.append(response);
+    }
+    container.append(card);
+  }
+  return container;
+}
+
+function uploadItemList(items) {
+  const container = document.createElement('div');
+  container.className = 'upload-item-list';
+  if (!items.length) {
+    const empty = document.createElement('p');
+    empty.className = 'upload-muted';
+    empty.textContent = 'Phiên này chưa có tệp nào.';
+    container.append(empty);
+    return container;
+  }
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.className = 'upload-item';
+    const info = document.createElement('div');
+    const name = document.createElement('strong');
+    name.textContent = item.filename;
+    const kind = document.createElement('small');
+    const details = [ITEM_KIND_LABELS[item.kind] || item.kind, formatBytes(item.size)];
+    if (item.missing) details.push('không còn trên máy');
+    else if (item.sizeMismatch) details.push(`trên máy ${formatBytes(item.diskSize)}`);
+    kind.textContent = details.join(' · ');
+    info.append(name, kind);
+    const tone = item.missing ? 'error'
+      : item.cloudflareStatus === 'uploaded' ? 'ok'
+        : item.cloudflareStatus === 'skipped' ? 'warn' : 'queue';
+    row.append(info, badge(ITEM_STATUS_LABELS[item.cloudflareStatus] || item.cloudflareStatus, tone));
+    container.append(row);
+    if (item.skipReason) {
+      const reason = document.createElement('p');
+      reason.className = 'upload-item-reason';
+      reason.textContent = item.skipReason;
+      container.append(reason);
+    }
+  }
+  return container;
+}
+
+function uploadEventList(events) {
+  const container = document.createElement('div');
+  container.className = 'upload-event-list';
+  if (!events.length) {
+    const empty = document.createElement('p');
+    empty.className = 'upload-muted';
+    empty.textContent = 'Chưa có ghi nhận nào.';
+    container.append(empty);
+    return container;
+  }
+  for (const event of events) {
+    const row = document.createElement('div');
+    row.className = 'upload-event';
+    const type = document.createElement('span');
+    type.textContent = event.type;
+    const when = document.createElement('small');
+    when.textContent = formatWhen(event.at);
+    row.append(type, when);
+    container.append(row);
+  }
+  return container;
 }
 
 async function init() {
@@ -1933,6 +2457,19 @@ async function init() {
   };
   $('#openSessionsBtn').onclick = openSessionsScreen;
   $('#sessionsBack').onclick = () => { revokeSessionThumbUrls(); showScreen('homeScreen'); };
+  $('#openUploadsBtn').onclick = () => { openUploadsScreen().catch((error) => toast(error.message)); };
+  $('#uploadsBack').onclick = closeUploadsScreen;
+  $('#uploadsRefresh').onclick = () => { refreshUploads().catch((error) => toast(error.message)); };
+  $$('#uploadsFilters .uploads-filter').forEach((button) => button.onclick = () => {
+    state.uploads.filter = button.dataset.filter;
+    renderUploadsSummary();
+    renderUploadsList();
+  });
+  $('#uploadsAutoRefresh').onchange = (event) => {
+    state.uploads.autoRefresh = event.target.checked;
+    if (state.uploads.autoRefresh) startUploadsAutoRefresh();
+    else stopUploadsAutoRefresh();
+  };
   $$('.tab').forEach((tab) => tab.onclick = () => {
     $$('.tab').forEach((item) => item.classList.toggle('active', item === tab));
     $$('.tab-panel').forEach((panel) => panel.classList.toggle('active', panel.dataset.panel === tab.dataset.tab));
@@ -1948,9 +2485,17 @@ async function init() {
   };
   state.uploadUnsubscribe = window.photobooth.onUploadStatus((message) => {
     refreshStats();
+    if ($('#uploadsScreen').classList.contains('active')) refreshUploads({ silent: true }).catch(() => { });
     if (message.sessionId !== state.session?.id) return;
     if (message.status === 'uploaded') $('#resultStatus').textContent = 'Album online đã sẵn sàng rồi nè ✨';
     if (message.status === 'retrying') $('#resultStatus').textContent = 'Mạng đang chập chờn · ảnh vẫn an toàn trên máy nha~';
+  });
+  // Background failures used to crash the main process; now they arrive here so the
+  // operator sees them instead of a dead kiosk.
+  state.backgroundErrorUnsubscribe = window.photobooth.onBackgroundError((failure) => {
+    console.error('[background]', failure);
+    toast(`Có lỗi nền: ${failure.message}`);
+    if ($('#uploadsScreen').classList.contains('active')) refreshUploads({ silent: true }).catch(() => { });
   });
   $('#queuePill').onclick = async () => { await window.photobooth.queue.retry(); await refreshStats(); toast('Đang thử lưu lại những ảnh còn chờ…'); };
   document.addEventListener('keydown', (event) => {

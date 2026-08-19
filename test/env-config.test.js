@@ -6,7 +6,6 @@ import { envConfigPatch, parseEnv } from '../src/main/config.js';
 test('legacy .env values configure printer, QR, resolution and non-mirrored output', () => {
   const values = parseEnv(`
     PRINTER_NAME="DS-RX1 4x6" # old provider
-    PORT=6001
     COMPOSITE_TARGET_RESOLUTION=3600
     COMPOSITE_JPEG_QUALITY=100
     ENABLE_QR_ON_FRAME=on
@@ -24,7 +23,6 @@ test('legacy .env values configure printer, QR, resolution and non-mirrored outp
   const root = path.resolve('example-app');
   const config = envConfigPatch(values, root);
   assert.equal(config.print.deviceName, 'DS-RX1 4x6');
-  assert.equal(config.gallery.port, 6001);
   assert.equal(config.composite.targetResolution, 3600);
   assert.equal(config.composite.jpegQuality, 100);
   assert.equal(config.composite.qrEnabled, true);

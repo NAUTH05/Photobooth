@@ -39,7 +39,6 @@ const envNumber = (value, fallback) => Number.isFinite(Number(value)) ? Number(v
 
 export function envConfigPatch(values, appPath) {
   const resolution = Math.max(1200, Math.min(7200, Math.round(envNumber(values.COMPOSITE_TARGET_RESOLUTION, 3600))));
-  const port = Math.max(1024, Math.min(65535, Math.round(envNumber(values.PORT, 3847))));
   const defaultLocalFrames = (appPath.includes('app.asar') || appPath.endsWith('resources'))
     ? path.join(path.dirname(appPath), 'frames')
     : path.resolve(appPath, './frames');
@@ -49,7 +48,6 @@ export function envConfigPatch(values, appPath) {
     camera: {
       mirrorPreview: envBoolean(values.MIRROR_PREVIEW, true),
     },
-    gallery: { port },
     frames: { localDir: framesValue },
     branding: {
       name: values.BRANDING_NAME || 'Chạm Photobooth',

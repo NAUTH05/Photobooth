@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, session, shell } from 'electron';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,7 +7,6 @@ import { ConfigStore } from './config.js';
 import { CubeLutManager } from './cube-lut-manager.js';
 import { CloudflareGalleryClient } from './cloudflare-gallery-client.js';
 import { CloudflareUploadManager } from './cloudflare-upload-manager.js';
-import { CppGalleryBackend } from './cpp-gallery-backend.js';
 import { FrameManager } from './frame-manager.js';
 import { GradedPhotoService } from './graded-photo-service.js';
 import { mainFrameHandler } from './ipc-guard.js';
@@ -25,7 +24,6 @@ let localStore;
 let frameManager;
 let cloudUploader;
 let nativeBridge;
-let galleryServer;
 let timelapseProcessor;
 let sharpCompositor;
 let lutManager;
@@ -45,6 +43,25 @@ app.on('second-instance', () => {
   }
 });
 
+// A background failure — a vanished photo file, a socket dying mid-upload —
+// must never take the kiosk down with Electron's "A JavaScript error occurred
+// in the main process" dialog. Log it, tell the renderer, keep serving guests.
+function reportBackgroundFailure(scope, error) {
+  const message = String(error?.stack || error?.message || error);
+  console.error(`[${scope}]`, message);
+  try {
+    mainWindow?.webContents.send('app:background-error', {
+      scope,
+      message: String(error?.message || error).slice(0, 300),
+      code: String(error?.code || error?.cause?.code || ''),
+      at: new Date().toISOString()
+    });
+  } catch { /* window already gone — the console log is the record */ }
+}
+
+process.on('uncaughtException', (error) => reportBackgroundFailure('uncaughtException', error));
+process.on('unhandledRejection', (reason) => reportBackgroundFailure('unhandledRejection', reason));
+
 const publicConfig = (config) => {
   const value = structuredClone(config);
   if (value.cloudflare) {
@@ -54,10 +71,13 @@ const publicConfig = (config) => {
   return value;
 };
 
+// Album ảnh chỉ còn một nguồn duy nhất: website online. Khi chưa bật album
+// online thì phiên không có link nào để đưa vào QR, nên trả về chuỗi rỗng và
+// giao diện tự bỏ qua phần QR thay vì hiện link chết.
 const galleryUrlFor = (sessionValue) => {
   const config = configStore.get();
-  if (config.cloudflare?.enabled && config.cloudflare.baseUrl) return new CloudflareGalleryClient(config.cloudflare).urlFor(sessionValue);
-  return galleryServer.urlFor(sessionValue);
+  if (!config.cloudflare?.enabled || !config.cloudflare.baseUrl) return '';
+  return new CloudflareGalleryClient(config.cloudflare).urlFor(sessionValue);
 };
 
 async function syncCreativeAssets() {
@@ -72,6 +92,8 @@ async function createWindow() {
     width: 1280, height: 800, minWidth: 1024, minHeight: 700,
     kiosk: Boolean(config.kiosk), fullscreen: Boolean(config.kiosk), autoHideMenuBar: true,
     backgroundColor: '#f3eee6',
+    // Taskbar and window icon while running unpackaged; the installed build carries it in the exe.
+    icon: path.join(__dirname, '..', '..', 'icon', 'app-icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false,
       sandbox: true, spellcheck: false
@@ -143,6 +165,38 @@ function registerIpc() {
     await cloudUploader.process();
     return localStore.stats();
   });
+  handle('uploads:list', (_event, options) => localStore.uploadSessions({
+    includeArchived: options?.includeArchived !== false
+  }));
+  handle('uploads:detail', (_event, sessionId) => localStore.uploadSessionDetail(String(sessionId || '')));
+  handle('uploads:cancel', (_event, sessionId) => cloudUploader.cancelSession(String(sessionId || '')));
+  handle('uploads:retry', (_event, sessionId) => cloudUploader.retrySession(String(sessionId || '')));
+  handle('uploads:archive', async (_event, sessionId) => {
+    const view = await localStore.setArchived(String(sessionId || ''), true);
+    return view;
+  });
+  handle('uploads:unarchive', async (_event, sessionId) => {
+    const view = await localStore.setArchived(String(sessionId || ''), false);
+    cloudUploader.process().catch(() => { });
+    return view;
+  });
+  handle('uploads:reveal', async (_event, sessionId) => {
+    const directory = localStore.sessionPath(String(sessionId || ''));
+    const detail = await localStore.uploadSessionDetail(String(sessionId || ''));
+    if (detail.directoryExists) {
+      const present = detail.items.find((item) => !item.missing);
+      if (present) {
+        shell.showItemInFolder(path.join(directory, present.filename));
+        return { ok: true, directory };
+      }
+      const failure = await shell.openPath(directory);
+      return failure ? { ok: false, error: failure, directory } : { ok: true, directory };
+    }
+    // The session folder is gone (cleaned up or moved) — land the operator in the
+    // sessions root instead of failing silently.
+    await shell.openPath(localStore.sessionsRoot).catch(() => '');
+    return { ok: false, error: `Thư mục phiên không còn trên máy: ${directory}`, directory };
+  });
   handle('timelapse:encode', (_event, payload) => timelapseProcessor.encode(payload));
   handle('frames:list', () => frameManager.list());
   handle('frames:sync', async () => {
@@ -176,7 +230,6 @@ function registerIpc() {
     if (!sessionValue) throw new Error('Session not found');
     return galleryUrlFor(sessionValue);
   });
-  handle('gallery:health', () => galleryServer.health());
   handle('native:health', () => nativeBridge.health());
   handle('native:trigger', (_event, payload) => {
     const request = typeof payload === 'string' ? { sessionId: payload } : (payload || {});
@@ -381,7 +434,6 @@ async function cleanupServices() {
   cleanupTimer = null;
   frameSyncTimer = null;
   cloudUploader?.stop();
-  galleryServer?.stop();
   await shutdownLutPool().catch((error) => console.error('LUT worker pool shutdown error:', error));
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
 }
@@ -423,13 +475,6 @@ app.whenReady().then(async () => {
   gradedPhotoService = new GradedPhotoService(localStore, lutManager);
   sharpCompositor = new SharpCompositor(localStore, frameManager, configStore, lutManager);
   nativeBridge = new NativeBridge(appPath, localStore, app.isPackaged ? process.resourcesPath : null);
-  galleryServer = new CppGalleryBackend(
-    appPath,
-    runtimeRoot,
-    configStore,
-    app.isPackaged ? process.resourcesPath : null
-  );
-  await galleryServer.start();
   cloudUploader = new CloudflareUploadManager(localStore, configStore);
   cloudUploader.on('status', (message) => mainWindow?.webContents.send('upload:status', message));
   registerIpc();

@@ -1,6 +1,6 @@
 # Chạm Photobooth
 
-Ứng dụng photobooth lưu động cho Windows. Electron phụ trách giao diện cảm ứng và tích hợp hệ điều hành; backend gallery/API chạy bằng C++ độc lập. C++ camera bridge kích hoạt máy ảnh DSLR qua một Canon EDSDK helper.
+Ứng dụng photobooth lưu động cho Windows. Electron phụ trách giao diện cảm ứng và tích hợp hệ điều hành; album ảnh cho khách do website online (Heroku + Firestore + Cloudflare R2) phục vụ. C++ camera bridge kích hoạt máy ảnh DSLR qua một Canon EDSDK helper.
 
 ## Chức năng hiện có
 
@@ -9,9 +9,9 @@
 - Chế độ DSLR thông qua C++ bridge, có timeout và kiểm tra file đầu ra.
 - In ảnh qua hệ thống in của Windows, hỗ trợ máy in mặc định hoặc tên máy in cấu hình.
 - Mỗi phiên có timestamp, lưu local trước, tự retry upload Cloudflare R2 và tiếp tục sau khi app khởi động lại.
-- Upload theo thư mục phiên, tạo QR mở gallery web để xem, tải ảnh digital.
-- Backend gallery C++ đọc snapshot hàng đợi nguyên tử, xác thực token theo thời gian hằng, từ chối nội dung ảnh giả và chặn toàn bộ gallery hết hạn.
-- Gallery web responsive có lightbox, tải ảnh lẻ đã hậu kỳ và trạng thái rõ ràng khi link hết hạn hoặc ảnh đang đồng bộ.
+- Upload theo thư mục phiên, tạo QR mở album online để xem, tải ảnh digital.
+- Website album xác thực token theo hash, chặn toàn bộ album hết hạn và chỉ trả link R2 có thời hạn ngắn.
+- Album web responsive có lightbox, tải ảnh lẻ đã hậu kỳ và trạng thái rõ ràng khi link hết hạn hoặc ảnh đang đồng bộ.
 - Tự dọn file local cũ hơn 7 ngày mỗi lần khởi động app; thời gian giữ lại sau upload có thể cấu hình thêm.
 - Khung ảnh đồng bộ từ kho sáng tạo online (frame PNG/WebP + LUT `.cube`).
 - Màn hình quản trị mở bằng nút bánh răng hoặc `Ctrl+Shift+A`.
@@ -26,7 +26,7 @@ npm run build:native
 npm run dev
 ```
 
-Script build tự chọn bản GCC mới nhất có trên máy và liên kết runtime tĩnh vào hai executable, vì vậy bản đóng gói không phụ thuộc DLL MinGW bên ngoài.
+Script build tự chọn bản GCC mới nhất có trên máy và liên kết runtime tĩnh vào camera bridge, vì vậy bản đóng gói không phụ thuộc DLL MinGW bên ngoài.
 
 Build và chạy bản production:
 
@@ -55,7 +55,7 @@ Khung ảnh được đặt trong thư mục `frames/` hoặc tải từ kho sá
 
 ## Dùng cấu hình `.env` cũ
 
-File `.env` ở thư mục gốc được nạp sau cấu hình mặc định và cấu hình người dùng. Các giá trị máy in, offset, cổng gallery, QR, độ phân giải composite và chất lượng JPEG được dùng trực tiếp.
+File `.env` ở thư mục gốc được nạp sau cấu hình mặc định và cấu hình người dùng. Các giá trị máy in, offset, QR, độ phân giải composite và chất lượng JPEG được dùng trực tiếp.
 
 - `MIRROR_PREVIEW=true`: lật gương phần xem trước và ảnh chụp để khách dễ tạo dáng.
 - `LOCAL_FRAMES_DIR=./frames`: dùng bộ frame local của nhà cung cấp cũ.
@@ -86,15 +86,13 @@ Do Canon EDSDK có giấy phép phân phối riêng, repo cung cấp bridge C++ 
 
 Dữ liệu runtime nằm trong Electron `userData/runtime-data`, không nằm trong source repo. Queue dùng ghi file nguyên tử. Nếu mất điện giữa lúc chụp/upload, phiên có media sẽ được đưa lại về trạng thái chờ ở lần mở app sau. Mỗi lần app khởi động, các file local cũ hơn 7 ngày được tự động xóa bất kể trạng thái upload. File đã upload xong và khớp checksum cũng được dọn sớm hơn nếu vượt quá thời gian giữ lại cấu hình (`storage.retentionHoursAfterUpload`).
 
-## Gallery QR local/LAN
+## Album QR cho khách
 
-Ứng dụng tự khởi động `photobooth-gallery-backend.exe` ở cổng `3847` và đưa IP LAN của máy vào QR, ví dụ `http://192.168.1.20:3847/s/...`. Nếu cổng bận, backend tự chọn cổng trống và QR dùng đúng cổng thực tế. Điện thoại phải kết nối cùng Wi‑Fi/LAN với máy photobooth. Windows có thể hỏi quyền Firewall ở lần chạy đầu; cần cho phép truy cập trên mạng Private.
+Mỗi phiên có session ID và token ngẫu nhiên riêng, ví dụ `https://photos.example.com/s/PB_...?t=...`. Vì vậy một domain phục vụ đồng thời nhiều khách nhưng mỗi người chỉ mở được URL của phiên mình. Album hiển thị timestamp, ảnh lẻ đã lên màu, ảnh ghép, video timelapse và nút tải ảnh.
 
-Mỗi URL có session ID và token ngẫu nhiên riêng, ví dụ `https://photos.example.com/s/PB_...?...`. Vì vậy một domain có thể phục vụ đồng thời nhiều khách nhưng mỗi người chỉ có URL riêng của phiên mình. Gallery hiển thị timestamp, ảnh lẻ đã lên màu, ảnh ghép và nút tải ảnh.
+Album chỉ có một nguồn duy nhất là website online, nên QR chỉ xuất hiện khi Quản trị → Hệ thống đã bật album online và điền URL Heroku. Nếu chưa bật, phiên vẫn chụp – ghép – in bình thường, chỉ là ảnh in không có QR và màn hình cuối thông báo album chưa được bật. Không còn chế độ phục vụ ảnh qua Wi‑Fi/LAN từ máy photobooth.
 
-Thời hạn mặc định là 7 ngày và có thể đổi trong Quản trị → Hệ thống. Khi hết hạn, route gallery trả HTTP 410 cùng trang thông báo hết hạn.
-
-Khi có domain/hosting, điền URL gốc vào `gallery.publicBaseUrl`. Backend giữ route `/s/:sessionId?t=...` và API `/api/public/sessions/:sessionId?t=...` để frontend gallery không phụ thuộc vào implementation cũ.
+Thời hạn mặc định là 7 ngày và có thể đổi trong Quản trị → Hệ thống. Khi hết hạn, website trả HTTP 410 cùng trang thông báo hết hạn; khi phiên bị xóa thì trả 404.
 
 ## Heroku + Firestore + Cloudflare R2 Gallery
 
@@ -111,11 +109,10 @@ Tài liệu chi tiết:
 - [UI design brief](docs/ui-design-brief.md)
 - [Audit và roadmap](docs/implementation-roadmap.md)
 
-## Kiến trúc backend C++
+## Kiến trúc native và dữ liệu local
 
-- `native/gallery_backend.cpp`: HTTP/API server, kiểm tra token và thời hạn, phục vụ ảnh local.
-- `src/main/cpp-gallery-backend.js`: lớp mỏng để Electron khởi động, giám sát và dừng executable C++.
-- `src/gallery/`: frontend gallery công khai, không chứa logic truy cập file trực tiếp.
+- `native/camera_bridge.cpp`: executable C++ duy nhất, gọi Canon EDSDK helper để chụp DSLR và kiểm tra file đầu ra.
 - `src/main/local-store.js`: ghi snapshot nguyên tử và chỉ nhận JPEG/PNG có chữ ký file hợp lệ.
+- `src/main/cloudflare-upload-manager.js`: hàng đợi upload, retry và dọn phiên hết hạn trên R2.
 
-Gallery rỗng bị loại bỏ thay vì lưu metadata rác. Phiên hết hạn không xuất hiện trong hàng đợi upload và được kiểm tra lại ngay trước từng file.
+Phiên rỗng bị loại bỏ thay vì lưu metadata rác. Phiên hết hạn không xuất hiện trong hàng đợi upload và được kiểm tra lại ngay trước từng file.

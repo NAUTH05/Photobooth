@@ -10,6 +10,7 @@
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "build:renderer": "vite build",
     "build:native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1",
+    "assets:brand": "node scripts/make-brand-assets.mjs",
     "build": "npm run build:renderer && npm run build:native",
     "dist:win": "npm run build && electron-builder --win nsis",
     "start": "electron .",
@@ -39,10 +40,9 @@
       "dist/**/*",
       "src/main/**/*",
       "src/shared/**/*",
-      "src/gallery/**/*",
       "config/**/*",
       "native/build/photobooth-camera-bridge.exe",
-      "native/build/photobooth-gallery-backend.exe",
+      "icon/app-icon.ico",
       "node_modules/ffmpeg-static/**/*",
       "node_modules/sharp/**/*",
       "node_modules/@img/**/*",
@@ -68,7 +68,6 @@
     ],
     "asarUnpack": [
       "native/build/photobooth-camera-bridge.exe",
-      "native/build/photobooth-gallery-backend.exe",
       "node_modules/ffmpeg-static/ffmpeg.exe",
       "node_modules/sharp/**/*",
       "node_modules/@img/**/*",
@@ -76,6 +75,7 @@
       "node_modules/semver/**/*"
     ],
     "win": {
+      "icon": "icon/app-icon.ico",
       "target": [
         "nsis"
       ]
@@ -83,7 +83,10 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true
+      "createDesktopShortcut": true,
+      "installerIcon": "icon/app-icon.ico",
+      "uninstallerIcon": "icon/app-icon.ico",
+      "installerHeaderIcon": "icon/app-icon.ico"
     }
   }
 }

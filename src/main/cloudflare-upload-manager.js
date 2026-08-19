@@ -4,6 +4,42 @@ import { isRetryableError, retryDelayMs } from './retry-policy.js';
 
 const expired = (session) => Boolean(session.expiresAt && Date.parse(session.expiresAt) <= Date.now());
 
+const MAX_ERROR_LOG = 20;
+
+// Snapshot of a failure the session manager screen can render verbatim:
+// which step broke, the HTTP status, and the raw server response.
+function errorDetail(error, context = {}) {
+  return {
+    at: new Date().toISOString(),
+    stage: String(error?.stage || context.stage || 'upload'),
+    status: error?.status ?? null,
+    retryable: isRetryableError(error),
+    message: String(error?.message || error).slice(0, 500),
+    response: String(error?.body || '').slice(0, 2000),
+    code: String(error?.cause?.code || error?.code || ''),
+    ...(context.itemId ? { itemId: context.itemId, itemKind: context.itemKind || '', filename: context.filename || '' } : {})
+  };
+}
+
+function pushErrorDetail(session, detail) {
+  session.cloudflareErrors ??= [];
+  session.cloudflareErrors.push(detail);
+  if (session.cloudflareErrors.length > MAX_ERROR_LOG) {
+    session.cloudflareErrors.splice(0, session.cloudflareErrors.length - MAX_ERROR_LOG);
+  }
+}
+
+// Raised when the operator cancels or parks a session from the manager screen
+// while its upload pass is between items.
+class UploadCancelled extends Error {
+  constructor(reason = 'Đã hủy upload theo yêu cầu') {
+    super(reason);
+    this.name = 'UploadCancelled';
+    this.cancelled = true;
+    this.retryable = false;
+  }
+}
+
 export class CloudflareUploadManager extends EventEmitter {
   constructor(localStore, configStore, clientFactory = (config) => new CloudflareGalleryClient(config)) {
     super();
@@ -24,7 +60,11 @@ export class CloudflareUploadManager extends EventEmitter {
 
   queuedSessions() {
     return Object.values(this.localStore.queue.sessions)
-      .filter((session) => session.finishedAt && !expired(session) && !['cancelled', 'expired'].includes(session.status) && !['uploaded', 'failed'].includes(session.cloudflareStatus))
+      .filter((session) => session.finishedAt
+        && !expired(session)
+        && !session.archived
+        && !['cancelled', 'expired'].includes(session.status)
+        && !['uploaded', 'failed', 'cancelled'].includes(session.cloudflareStatus))
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 
@@ -41,11 +81,17 @@ export class CloudflareUploadManager extends EventEmitter {
         try {
           await this.uploadSession(client, session.id, config);
         } catch (error) {
+          if (error?.cancelled) {
+            this.emit('status', { sessionId: session.id, status: 'cancelled', source: 'cloudflare' });
+            continue;
+          }
           const retryable = isRetryableError(error);
+          const detail = errorDetail(error, { stage: 'session' });
           await this.localStore.mutate(session.id, (value) => {
             value.cloudflareStatus = retryable ? 'retrying' : 'failed';
             value.cloudflareAttempts = (value.cloudflareAttempts || 0) + 1;
             value.cloudflareLastError = String(error.message || error).slice(0, 500);
+            pushErrorDetail(value, detail);
             const ceiling = Math.max(1, Number(config.storage.maxRetryMinutes) || 30) * 60000;
             const wait = retryDelayMs(value.cloudflareAttempts, {
               baseMs: Math.max(1, Number(config.storage.retryBaseSeconds) || 5) * 1000,
@@ -108,6 +154,7 @@ export class CloudflareUploadManager extends EventEmitter {
     for (;;) {
       for (const item of items) {
         if (expired(session)) throw new Error('Gallery đã hết hạn');
+        this.assertNotCancelled(sessionId);
         if (item.cloudflareStatus === 'uploaded' || item.cloudflareStatus === 'skipped') continue;
         try {
           await client.uploadItem(session, item);
@@ -122,12 +169,14 @@ export class CloudflareUploadManager extends EventEmitter {
           // Auth/permission errors (401, 403) are session-level → fail the whole session
           const status = itemError?.status ?? null;
           if (status === 401 || status === 403) throw itemError;
-          // Non-retryable item error (e.g. file too large, rejected by server) → skip this item
+          // Non-retryable item error (e.g. file too large, missing on disk, rejected by server) → skip this item
           console.warn(`[upload] Skipping item ${item.id} (${item.kind}): ${itemError.message}`);
           skippedItems.push({ id: item.id, kind: item.kind, error: String(itemError.message).slice(0, 200) });
+          const detail = errorDetail(itemError, { stage: itemError?.stage || 'item', itemId: item.id, itemKind: item.kind, filename: item.filename });
           await this.localStore.mutate(sessionId, (value) => {
             const target = value.items.find((candidate) => candidate.id === item.id);
             if (target) Object.assign(target, { cloudflareStatus: 'skipped', cloudflareSkipReason: String(itemError.message).slice(0, 200) });
+            pushErrorDetail(value, detail);
           });
         }
         this.emit('status', { sessionId, status: 'uploading', source: 'cloudflare', progress: uploaded / Math.max(items.length, uploaded) });
@@ -159,6 +208,53 @@ export class CloudflareUploadManager extends EventEmitter {
     });
     this.emit('status', { sessionId, status: 'uploaded', source: 'cloudflare', progress: 1, publicLink: galleryUrl });
     await this.localStore.cleanup(config.storage.retentionHoursAfterUpload, { requireCloudflare: true });
+  }
+
+  assertNotCancelled(sessionId) {
+    const live = this.localStore.queue.sessions[sessionId];
+    if (!live) throw new UploadCancelled('Phiên đã bị xóa khỏi hàng đợi');
+    if (live.cloudflareStatus === 'cancelled') throw new UploadCancelled();
+    if (live.archived) throw new UploadCancelled('Phiên đã được lưu trữ, tạm dừng upload');
+  }
+
+  // Stops an upload without touching the local photos: the pass in flight bails
+  // between items and the queue skips the session until it is retried.
+  async cancelSession(sessionId) {
+    const session = this.localStore.queue.sessions[sessionId];
+    if (!session) throw new Error('Không tìm thấy phiên này');
+    if (session.cloudflareStatus === 'uploaded') throw new Error('Phiên đã upload xong, không thể hủy');
+    await this.localStore.mutate(sessionId, (value) => {
+      value.cloudflareStatus = 'cancelled';
+      value.cloudflareNextAttemptAt = null;
+      value.cloudflareCancelledAt = new Date().toISOString();
+      value.cloudflareLastError = 'Đã hủy upload theo yêu cầu';
+    });
+    this.emit('status', { sessionId, status: 'cancelled', source: 'cloudflare' });
+    return this.localStore.uploadSessionView(sessionId);
+  }
+
+  // Puts a cancelled, failed or skipped session back in line, including items
+  // that were skipped on an earlier pass.
+  async retrySession(sessionId) {
+    const session = this.localStore.queue.sessions[sessionId];
+    if (!session) throw new Error('Không tìm thấy phiên này');
+    if (!session.finishedAt) throw new Error('Phiên chưa hoàn tất, chưa thể upload');
+    await this.localStore.mutate(sessionId, (value) => {
+      value.cloudflareStatus = 'pending';
+      value.cloudflareNextAttemptAt = null;
+      value.cloudflareAttempts = 0;
+      value.cloudflareLastError = null;
+      delete value.cloudflareCancelledAt;
+      value.cloudflareDeletionStatus = null;
+      for (const item of value.items || []) {
+        if (item.deletedAt || item.cloudflareStatus === 'uploaded') continue;
+        item.cloudflareStatus = 'pending';
+        delete item.cloudflareSkipReason;
+      }
+    });
+    this.emit('status', { sessionId, status: 'pending', source: 'cloudflare' });
+    this.process().catch(() => { });
+    return this.localStore.uploadSessionView(sessionId);
   }
 
   async retryFailed() {

@@ -59,12 +59,8 @@ button {
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  display: grid;
-  place-items: center;
-  color: var(--ink);
-  background: transparent;
-  border: 1px solid var(--ink);
-  font: 700 25px var(--font-display);
+  display: block;
+  object-fit: contain;
 }
 
 .brand strong,
@@ -2572,4 +2568,506 @@ dialog::backdrop {
 
 body.capture-active .dev-credits-badge {
   display: none;
+}
+
+/* ——— Upload session manager ——————————————————————————————————————————— */
+
+#openUploadsCount {
+  background: #eee7dc;
+  border-radius: 99px;
+  padding: 1px 8px;
+  margin-left: 4px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+#openUploadsCount.alert {
+  background: #fbe0da;
+  color: #a33420;
+}
+
+#uploadsScreen.active {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
+}
+
+.uploads-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.uploads-stat {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.uploads-stat strong {
+  font-family: var(--font-display);
+  font-size: 26px;
+  line-height: 1.1;
+  color: var(--ink);
+}
+
+.uploads-stat span {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.uploads-stat small {
+  font-size: 11px;
+  color: #7d8e88;
+}
+
+.uploads-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.uploads-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.uploads-filter {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 99px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.uploads-filter span {
+  background: #eee7dc;
+  border-radius: 99px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.uploads-filter.active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+}
+
+.uploads-filter.active span {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+
+.uploads-auto {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.uploads-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+.uploads-list,
+.uploads-detail {
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+.uploads-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.uploads-empty,
+.uploads-detail-empty {
+  border: 1px dashed var(--line);
+  border-radius: 16px;
+  padding: 28px 20px;
+  text-align: center;
+  color: #7d8e88;
+  font-size: 13px;
+}
+
+.upload-row {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.upload-row:hover {
+  border-color: var(--accent);
+}
+
+.upload-row.selected {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 2px rgba(23, 60, 52, 0.14);
+}
+
+.upload-row.archived {
+  background: #f7f3ec;
+}
+
+.upload-row:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.upload-row-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.upload-row-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.upload-row-title strong {
+  font-family: var(--font-display);
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.upload-row-title small,
+.upload-row-facts {
+  font-size: 11px;
+  color: #7d8e88;
+}
+
+.upload-row-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.upload-badge {
+  border-radius: 99px;
+  padding: 3px 9px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.upload-badge.tone-idle {
+  background: #eee7dc;
+  color: #5d6b66;
+}
+
+.upload-badge.tone-queue {
+  background: #e3eefb;
+  color: #1f4f80;
+}
+
+.upload-badge.tone-busy {
+  background: #dff1ea;
+  color: #16644f;
+}
+
+.upload-badge.tone-ok {
+  background: #d9f0dd;
+  color: #1d6b33;
+}
+
+.upload-badge.tone-warn {
+  background: #fdefd6;
+  color: #8a5a12;
+}
+
+.upload-badge.tone-error {
+  background: #fbe0da;
+  color: #a33420;
+}
+
+.upload-progress {
+  height: 6px;
+  border-radius: 99px;
+  background: #ece5da;
+  overflow: hidden;
+}
+
+.upload-progress i {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.upload-row-error {
+  margin: 0;
+  font-size: 11px;
+  color: #a33420;
+  overflow-wrap: anywhere;
+}
+
+.upload-row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.upload-action {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 99px;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.upload-action:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+.upload-action.danger:hover:not(:disabled) {
+  border-color: #a33420;
+  color: #a33420;
+}
+
+.upload-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.uploads-detail {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.uploads-detail:has(> .uploads-detail-empty) {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.upload-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.upload-detail-head h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.upload-detail-head small {
+  font-size: 11px;
+  color: #7d8e88;
+  overflow-wrap: anywhere;
+}
+
+.upload-detail-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 14px;
+}
+
+.upload-detail-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  border-bottom: 1px dotted var(--line);
+  padding: 4px 0;
+}
+
+.upload-detail-row span {
+  color: #7d8e88;
+  white-space: nowrap;
+}
+
+.upload-detail-row strong {
+  font-size: 11px;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.upload-detail-path {
+  margin: 0;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+  color: #7d8e88;
+  overflow-wrap: anywhere;
+}
+
+.upload-detail-alert {
+  background: #fbe0da;
+  color: #a33420;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.upload-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.upload-detail-section h4 {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7d8e88;
+}
+
+.upload-muted {
+  margin: 0;
+  font-size: 12px;
+  color: #7d8e88;
+}
+
+.upload-error-list,
+.upload-item-list,
+.upload-event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.upload-error {
+  border: 1px solid #f0d5cd;
+  border-left: 4px solid #e0846c;
+  background: #fdf6f4;
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.upload-error.permanent {
+  border-left-color: #a33420;
+}
+
+.upload-error-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.upload-error-head strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.upload-error-head small {
+  font-size: 10px;
+  color: #7d8e88;
+  white-space: nowrap;
+}
+
+.upload-error-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.upload-error-message {
+  margin: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.upload-error-response {
+  margin: 0;
+  background: #2c2622;
+  color: #f4e9dd;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.upload-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid #f0ebe2;
+  padding-bottom: 6px;
+}
+
+.upload-item strong {
+  display: block;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.upload-item small,
+.upload-event {
+  font-size: 10px;
+  color: #7d8e88;
+}
+
+.upload-item-reason {
+  margin: -4px 0 0;
+  font-size: 10px;
+  color: #8a5a12;
+  overflow-wrap: anywhere;
+}
+
+.upload-event {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.upload-event span {
+  font-weight: 700;
+  color: var(--ink);
+  overflow-wrap: anywhere;
 }

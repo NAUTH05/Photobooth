@@ -12,6 +12,7 @@
     />
     <meta name="theme-color" content="#fff8f3" />
     <title>Chạm Photobooth</title>
+    <link rel="icon" type="image/png" href="./logo.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Quicksand:wght@500;600;700&display=swap" rel="stylesheet" />
@@ -20,7 +21,7 @@
     <div id="app">
       <header class="topbar">
         <button class="brand" id="brandHome" aria-label="Về trang chủ">
-          <span class="brand-mark">C</span>
+          <img class="brand-mark" src="./logo.png" alt="" />
           <span
             ><strong id="brandName">Chạm Photobooth</strong
             ><small id="brandTagline">Gói nụ cười mang về nha~</small></span
@@ -299,6 +300,72 @@
           </div>
           <div class="sessions-grid" id="sessionsList"></div>
         </section>
+
+        <section class="screen" id="uploadsScreen">
+          <div class="section-heading">
+            <button class="back-button" id="uploadsBack">←</button>
+            <div>
+              <p class="eyebrow">QUẢN LÝ PHIÊN UPLOAD</p>
+              <h2>Những phiên đang gửi lên web</h2>
+              <p class="selection-help">
+                Chạm vào một phiên để xem chi tiết từng tệp và phản hồi từ
+                server.
+              </p>
+            </div>
+            <button class="small-button" id="uploadsRefresh" type="button">
+              Làm mới
+            </button>
+          </div>
+
+          <div class="uploads-summary" id="uploadsSummary"></div>
+
+          <div class="uploads-toolbar">
+            <div class="uploads-filters" id="uploadsFilters" role="tablist">
+              <button
+                type="button"
+                class="uploads-filter active"
+                data-filter="active"
+              >
+                Đang xử lý <span>0</span>
+              </button>
+              <button type="button" class="uploads-filter" data-filter="failed">
+                Có lỗi <span>0</span>
+              </button>
+              <button
+                type="button"
+                class="uploads-filter"
+                data-filter="uploaded"
+              >
+                Đã xong <span>0</span>
+              </button>
+              <button
+                type="button"
+                class="uploads-filter"
+                data-filter="archived"
+              >
+                Lưu trữ <span>0</span>
+              </button>
+              <button type="button" class="uploads-filter" data-filter="all">
+                Tất cả <span>0</span>
+              </button>
+            </div>
+            <label class="toggle uploads-auto"
+              ><input id="uploadsAutoRefresh" type="checkbox" checked /><span
+              ></span
+              >Tự làm mới</label
+            >
+          </div>
+
+          <div class="uploads-layout">
+            <div class="uploads-list" id="uploadsList"></div>
+            <aside class="uploads-detail" id="uploadsDetail">
+              <div class="uploads-detail-empty">
+                Chọn một phiên bên cạnh để xem trạng thái từng tệp, lỗi và phản
+                hồi từ server.
+              </div>
+            </aside>
+          </div>
+        </section>
       </main>
     </div>
 
@@ -431,18 +498,6 @@
           <label>Tên hiển thị<input name="branding.name" /></label>
           <label>Lời chào khách<input name="branding.tagline" /></label>
           <label
-            >Cổng album<input
-              name="gallery.port"
-              type="number"
-              min="1024"
-              max="65535"
-          /></label>
-          <label
-            >Địa chỉ album<input
-              name="gallery.publicBaseUrl"
-              placeholder="Để trống = dùng mạng nội bộ"
-          /></label>
-          <label
             >Album mở trong (ngày)<input
               name="gallery.expirationDays"
               type="number"
@@ -484,6 +539,9 @@
             Cập nhật ngay
           </button>
           <div class="stats" id="queueStats"></div>
+          <button type="button" class="small-button" id="openUploadsBtn">
+            📤 Quản lý phiên upload <b id="openUploadsCount">0</b>
+          </button>
         </div>
         <div class="dialog-actions">
           <button class="secondary-button" id="settingsCancel" type="button">

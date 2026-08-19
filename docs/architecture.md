@@ -44,4 +44,4 @@ Migration TypeScript + SQLite nên thực hiện theo kiểu strangler:
 - Print provider vẫn nằm trong `main.js`; nên tách `PrinterProvider` và thêm mock/hardware smoke test.
 - Queue local chưa phải SQLite nên query/report lớn không tối ưu; file JSON vẫn an toàn cho quy mô một kiosk nhưng cần theo dõi dung lượng.
 - Rate limiting hiện dựa vào secret/token và giới hạn payload; production quy mô lớn nên thêm Cloudflare WAF/rate-limit rule theo route.
-- Native C++ test cần đúng runtime DLL/toolchain trên Windows. Test JS có thể chạy độc lập nhưng test backend native sẽ fail nếu DLL thiếu.
+- Native C++ chỉ còn camera bridge và cần đúng runtime DLL/toolchain trên Windows. Test JS chạy độc lập; luồng DSLR vẫn phải smoke test bằng máy thật.

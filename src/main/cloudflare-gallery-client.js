@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fetchWithTimeout, RequestError } from './retry-policy.js';
 
@@ -17,12 +18,53 @@ function contentTypeFor(item) {
   if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
   if (extension === '.png') return 'image/png';
   if (extension === '.mp4') return 'video/mp4';
-  throw new Error(`Định dạng không hỗ trợ upload: ${extension}`);
+  // An unsupported extension never becomes supported, so retrying is pointless.
+  throw new RequestError(`Định dạng không hỗ trợ upload: ${extension}`, { retryable: false });
 }
 
-async function responseError(response) {
-  const text = await response.text().catch(() => '');
-  try { return JSON.parse(text).error || text || `HTTP ${response.status}`; } catch { return text || `HTTP ${response.status}`; }
+// The upload body is a file stream, and a stream whose `open` fails emits
+// 'error' before undici has subscribed to it — an unhandled 'error' event that
+// takes the whole Electron main process down. Stat the file first so a missing
+// or truncated artifact becomes a normal, non-retryable upload failure.
+async function statUploadSource(item) {
+  let stats;
+  try {
+    stats = await fsp.stat(item.path);
+  } catch (error) {
+    const missing = error.code === 'ENOENT' || error.code === 'ENOTDIR';
+    throw new RequestError(
+      missing
+        ? `Tệp không còn trên máy: ${item.filename}`
+        : `Không đọc được tệp ${item.filename}: ${error.message}`,
+      { retryable: !missing && error.code !== 'EACCES' && error.code !== 'EPERM', cause: error, stage: 'read-file' }
+    );
+  }
+  if (!stats.isFile()) {
+    throw new RequestError(`Đường dẫn không phải tệp: ${item.filename}`, { retryable: false, stage: 'read-file' });
+  }
+  if (Number(item.size) !== stats.size) {
+    throw new RequestError(
+      `Tệp ${item.filename} đã thay đổi trên máy (${stats.size} byte, hàng đợi ghi ${item.size} byte)`,
+      { retryable: false, stage: 'read-file' }
+    );
+  }
+  return stats;
+}
+
+// Owns the stream's 'error' event for the whole request so no fs failure can
+// ever escape as an uncaught exception in the main process.
+function openUploadStream(item) {
+  const stream = fs.createReadStream(item.path);
+  const failure = new Promise((_resolve, reject) => {
+    stream.once('error', (error) => reject(new RequestError(
+      `Không đọc được tệp ${item.filename}: ${error.message}`,
+      { retryable: error.code !== 'ENOENT', cause: error, stage: 'read-file' }
+    )));
+  });
+  // The fetch usually wins the race; swallow the loser so it is never reported
+  // as an unhandled rejection.
+  failure.catch(() => { });
+  return { stream, failure };
 }
 
 function uploadMetadata(item) {
@@ -65,7 +107,14 @@ export class CloudflareGalleryClient {
     const timeoutMs = Math.max(10, Number(this.config.requestTimeoutSeconds) || 180) * 1000;
     const response = await fetchWithTimeout(this.fetch, `${this.baseUrl}${pathname}`, options, timeoutMs);
     if (!response.ok) {
-      throw new RequestError(`${label}: ${await responseError(response)}`, { status: response.status });
+      const body = await response.text().catch(() => '');
+      let detail = body;
+      try { detail = JSON.parse(body).error || body; } catch { /* body is not JSON — keep it verbatim */ }
+      throw new RequestError(`${label}: ${detail || `HTTP ${response.status}`}`, {
+        status: response.status,
+        body,
+        stage: label
+      });
     }
     return response;
   }
@@ -86,6 +135,7 @@ export class CloudflareGalleryClient {
 
   async uploadItem(session, item) {
     const metadata = uploadMetadata(item);
+    await statUploadSource(item);
     const planResponse = await this.request(`/api/v1/sessions/${encodeURIComponent(session.id)}/items/${encodeURIComponent(item.id)}/upload-url`, {
       method: 'POST',
       headers: { authorization: `Bearer ${this.config.uploadSecret}`, 'content-type': 'application/json' },
@@ -93,14 +143,30 @@ export class CloudflareGalleryClient {
     }, 'Không tạo được địa chỉ upload R2');
     const plan = validateUploadPlan(await planResponse.json(), item);
     const timeoutMs = Math.max(10, Number(this.config.requestTimeoutSeconds) || 180) * 1000;
-    const uploaded = await fetchWithTimeout(this.fetch, plan.url, {
-      method: 'PUT',
-      headers: plan.headers,
-      body: fs.createReadStream(item.path),
-      duplex: 'half'
-    }, timeoutMs);
+    const { stream, failure } = openUploadStream(item);
+    let uploaded;
+    try {
+      uploaded = await Promise.race([
+        fetchWithTimeout(this.fetch, plan.url, {
+          method: 'PUT',
+          headers: plan.headers,
+          body: stream,
+          duplex: 'half'
+        }, timeoutMs),
+        failure
+      ]);
+    } catch (error) {
+      stream.destroy();
+      throw error;
+    }
     if (!uploaded.ok) {
-      throw new RequestError(`Upload R2 thất bại: ${await responseError(uploaded)}`, { status: uploaded.status });
+      stream.destroy();
+      const body = await uploaded.text().catch(() => '');
+      throw new RequestError(`Upload R2 thất bại: ${body || `HTTP ${uploaded.status}`}`, {
+        status: uploaded.status,
+        body,
+        stage: 'Upload R2'
+      });
     }
     const completed = await this.request(`/api/v1/sessions/${encodeURIComponent(session.id)}/items/${encodeURIComponent(item.id)}/complete`, {
       method: 'POST',
