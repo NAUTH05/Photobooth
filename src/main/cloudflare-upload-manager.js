@@ -101,26 +101,45 @@ export class CloudflareUploadManager extends EventEmitter {
     if (typeof client.prepareSession === 'function') await client.prepareSession(session);
     let items = session.items.filter((item) => !item.deletedAt);
     let uploaded = items.filter((item) => item.cloudflareStatus === 'uploaded').length;
+    const skippedItems = [];
     this.emit('status', { sessionId, status: 'uploading', source: 'cloudflare', progress: items.length ? uploaded / items.length : 0 });
     // Items (timelapse, graded photos, thumbnails) may be appended to the session while
     // this pass runs, so re-snapshot each round and keep going until nothing is pending.
     for (;;) {
       for (const item of items) {
         if (expired(session)) throw new Error('Gallery đã hết hạn');
-        if (item.cloudflareStatus === 'uploaded') continue;
-        await client.uploadItem(session, item);
-        await this.localStore.mutate(sessionId, (value) => {
-          const target = value.items.find((candidate) => candidate.id === item.id);
-          if (target) Object.assign(target, { cloudflareStatus: 'uploaded', cloudflareUploadedAt: new Date().toISOString(), cloudflareChecksumVerified: true });
-        });
-        uploaded += 1;
+        if (item.cloudflareStatus === 'uploaded' || item.cloudflareStatus === 'skipped') continue;
+        try {
+          await client.uploadItem(session, item);
+          await this.localStore.mutate(sessionId, (value) => {
+            const target = value.items.find((candidate) => candidate.id === item.id);
+            if (target) Object.assign(target, { cloudflareStatus: 'uploaded', cloudflareUploadedAt: new Date().toISOString(), cloudflareChecksumVerified: true });
+          });
+          uploaded += 1;
+        } catch (itemError) {
+          const retryable = isRetryableError(itemError);
+          if (retryable) throw itemError; // Retryable errors (network, 5xx) → bubble up to retry the whole session
+          // Auth/permission errors (401, 403) are session-level → fail the whole session
+          const status = itemError?.status ?? null;
+          if (status === 401 || status === 403) throw itemError;
+          // Non-retryable item error (e.g. file too large, rejected by server) → skip this item
+          console.warn(`[upload] Skipping item ${item.id} (${item.kind}): ${itemError.message}`);
+          skippedItems.push({ id: item.id, kind: item.kind, error: String(itemError.message).slice(0, 200) });
+          await this.localStore.mutate(sessionId, (value) => {
+            const target = value.items.find((candidate) => candidate.id === item.id);
+            if (target) Object.assign(target, { cloudflareStatus: 'skipped', cloudflareSkipReason: String(itemError.message).slice(0, 200) });
+          });
+        }
         this.emit('status', { sessionId, status: 'uploading', source: 'cloudflare', progress: uploaded / Math.max(items.length, uploaded) });
         session = this.localStore.queue.sessions[sessionId];
       }
       const next = session.items.filter((item) => !item.deletedAt);
-      if (!next.some((item) => item.cloudflareStatus !== 'uploaded')) break;
+      if (!next.some((item) => item.cloudflareStatus !== 'uploaded' && item.cloudflareStatus !== 'skipped')) break;
       items = next;
     }
+    // Publish if at least one item was uploaded successfully
+    const anyUploaded = session.items.some((item) => item.cloudflareStatus === 'uploaded');
+    if (!anyUploaded) throw new Error('Không có tệp nào upload thành công');
     await client.publishSession(session);
     const galleryUrl = client.urlFor(session);
     await this.localStore.mutate(sessionId, (value) => {
@@ -128,6 +147,7 @@ export class CloudflareUploadManager extends EventEmitter {
       value.cloudflareUploadedAt = new Date().toISOString();
       value.cloudflareNextAttemptAt = null;
       value.cloudflareGalleryUrl = galleryUrl;
+      value.cloudflareLastError = skippedItems.length ? `Bỏ qua ${skippedItems.length} tệp: ${skippedItems.map((s) => s.kind).join(', ')}` : null;
       value.status = 'uploaded';
       value.uploadedAt = value.cloudflareUploadedAt;
       for (const item of value.items) {

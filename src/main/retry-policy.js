@@ -1,4 +1,4 @@
-const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429]);
+const RETRYABLE_HTTP_STATUSES = new Set([408, 409, 425, 429]);
 
 export class RequestError extends Error {
   constructor(message, { status = null, retryable = null, cause } = {}) {
